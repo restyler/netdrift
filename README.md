@@ -1,4 +1,4 @@
-# 4proxy - Go Forward Proxy with Load Balancing
+# Netdrift - Forward Proxy with Load Balancing
 
 A simple HTTP CONNECT forward proxy server written in Go that load balances requests across multiple upstream proxies using round-robin algorithm.
 

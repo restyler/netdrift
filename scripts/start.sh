@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Simple startup script for 4proxy
+# Simple startup script for netdrift
 
 set -e
 
-echo "🚀 Starting 4proxy..."
+echo "🚀 Starting netdrift..."
 
 # Check if Go is installed
 if ! command -v go &> /dev/null; then
