@@ -100,7 +100,7 @@ func startProxy(port int, name string) {
 		name: name,
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	server := &http.Server{
 		Addr:    addr,
 		Handler: proxy,

@@ -1,0 +1,43 @@
+# Test Dockerfile - Includes main proxy and test proxies
+# Build stage
+FROM golang:1.21-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache git make
+
+# Copy go mod files
+COPY go.mod go.sum* ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build all applications (proxy and test proxies)
+RUN mkdir -p bin && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/proxy ./cmd/proxy && \
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o bin/test-proxy ./cmd/test-proxy
+
+# Final stage
+FROM alpine:latest
+
+# Install runtime dependencies
+RUN apk --no-cache add ca-certificates curl netcat-openbsd
+
+WORKDIR /app
+
+# Copy all binaries and configs from builder stage
+COPY --from=builder /app/bin ./bin
+COPY --from=builder /app/configs ./configs
+
+# Make binaries executable
+RUN chmod +x ./bin/proxy ./bin/test-proxy
+
+# Expose proxy ports
+EXPOSE 3130 3025 3026
+
+# Default command (can be overridden in docker-compose)
+CMD ["./bin/proxy", "-config", "/app/configs/docker.json"]

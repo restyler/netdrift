@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # Production proxy server
+  proxy:
+    build: .
+    container_name: netdrift-proxy
+    ports:
+      - "3130:3130"
+    environment:
+      - PROXY_CONFIG=/app/configs/docker.json
+    volumes:
+      - ./configs:/app/configs:ro
+      - netdrift-logs:/var/log/netdrift
+    networks:
+      - netdrift-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3130/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  netdrift-network:
+    driver: bridge
+
+volumes:
+  netdrift-logs:
+    driver: local

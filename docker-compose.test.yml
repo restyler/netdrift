@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  # Test proxy servers that act as upstream proxies
+  test-proxy-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: netdrift-test-proxy-1
+    command: /app/bin/test-proxy 3025
+    ports:
+      - "3025:3025"
+    networks:
+      - netdrift-test-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3025"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  test-proxy-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: netdrift-test-proxy-2
+    command: /app/bin/test-proxy 3026
+    ports:
+      - "3026:3026"
+    networks:
+      - netdrift-test-network
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "3026"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # Main proxy server that load balances across test proxies
+  main-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: netdrift-main-proxy
+    command: /app/bin/proxy -config /app/configs/docker.json
+    ports:
+      - "3130:3130"
+    environment:
+      - PROXY_CONFIG=/app/configs/docker.json
+    volumes:
+      - ./configs:/app/configs:ro
+    networks:
+      - netdrift-test-network
+    depends_on:
+      test-proxy-1:
+        condition: service_healthy
+      test-proxy-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3130/stats"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  netdrift-test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  netdrift-test-data:
+    driver: local

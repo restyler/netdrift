@@ -1,4 +1,4 @@
-.PHONY: build run-proxy run-test-proxies test test-integration clean
+.PHONY: build run-proxy run-test-proxies test test-integration clean docker-build docker-run docker-prod docker-test docker-prod-up docker-prod-down docker-test-up docker-test-down docker-logs
 
 # Build the main proxy server
 build:
@@ -55,10 +55,45 @@ clean:
 	rm -rf bin
 	rm -f proxy test-proxy faulty-proxy  # Legacy cleanup
 
-# Docker build
+# Production Docker commands
 docker-build:
 	docker build -t netdrift .
 
-# Docker run
 docker-run:
-	docker run -p 3130:3130 netdrift 
+	docker run -p 3130:3130 netdrift
+
+docker-prod:
+	docker build -t netdrift-prod .
+
+docker-prod-up:
+	docker-compose -f docker-compose.prod.yml up -d
+
+docker-prod-down:
+	docker-compose -f docker-compose.prod.yml down
+
+docker-prod-logs:
+	docker-compose -f docker-compose.prod.yml logs -f
+
+# Test Docker commands  
+docker-test:
+	docker build -f Dockerfile.test -t netdrift-test .
+
+docker-test-up:
+	docker-compose -f docker-compose.test.yml up -d
+
+docker-test-down:
+	docker-compose -f docker-compose.test.yml down
+
+docker-test-logs:
+	docker-compose -f docker-compose.test.yml logs -f
+
+# Legacy/convenience commands (use production)
+docker-up: docker-prod-up
+docker-down: docker-prod-down
+docker-logs: docker-prod-logs
+
+# Cleanup commands
+docker-clean:
+	docker-compose -f docker-compose.prod.yml down -v --remove-orphans || true
+	docker-compose -f docker-compose.test.yml down -v --remove-orphans || true
+	docker system prune -f 
