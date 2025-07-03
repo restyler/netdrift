@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -446,18 +447,33 @@ func writePidFile() {
 	log.Printf("PID file created: %s", pidFile)
 }
 
+var (
+	configFile = flag.String("config", "configs/us.json", "Path to configuration file")
+	showHelp   = flag.Bool("help", false, "Show help message")
+)
+
 func main() {
+	flag.Parse()
+	
+	if *showHelp {
+		fmt.Printf("Usage: %s [options]\n", os.Args[0])
+		fmt.Println("\nOptions:")
+		flag.PrintDefaults()
+		fmt.Println("\nEnvironment variables:")
+		fmt.Println("  PROXY_CONFIG - Path to configuration file (overrides -config)")
+		os.Exit(0)
+	}
+	
 	writePidFile()
 	
-	configFile := "us.json"
+	// Priority: Environment variable > Command line flag > Default
+	configPath := *configFile
 	if envConfig := os.Getenv("PROXY_CONFIG"); envConfig != "" {
-		configFile = envConfig
-	} else if len(os.Args) > 1 {
-		configFile = os.Args[1]
+		configPath = envConfig
 	}
 
-	log.Printf("Loading configuration from %s", configFile)
-	config, err := loadConfig(configFile)
+	log.Printf("Loading configuration from %s", configPath)
+	config, err := loadConfig(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

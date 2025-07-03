@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -112,18 +113,37 @@ func startProxy(port int, name string) {
 	}
 }
 
+var (
+	showHelp = flag.Bool("help", false, "Show help message")
+)
+
 func main() {
-	if len(os.Args) < 2 {
-		log.Println("Usage: go run test_proxy.go <port1> [port2] ...")
-		log.Println("Example: go run test_proxy.go 1025 1026")
+	flag.Parse()
+	
+	if *showHelp {
+		fmt.Printf("Usage: %s [options] <port1> [port2] ...\n", os.Args[0])
+		fmt.Println("\nArguments:")
+		fmt.Println("  port1, port2, ... - Port numbers to run test proxies on")
+		fmt.Println("\nOptions:")
+		flag.PrintDefaults()
+		fmt.Println("\nExample:")
+		fmt.Printf("  %s 3025 3026\n", os.Args[0])
+		os.Exit(0)
+	}
+	
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Printf("Usage: %s [options] <port1> [port2] ...\n", os.Args[0])
+		fmt.Println("Example: test-proxy 3025 3026")
+		fmt.Println("Use -help for more information")
 		os.Exit(1)
 	}
 
 	ports := make([]int, 0)
-	for i := 1; i < len(os.Args); i++ {
-		port, err := strconv.Atoi(os.Args[i])
+	for _, arg := range args {
+		port, err := strconv.Atoi(arg)
 		if err != nil {
-			log.Fatalf("Invalid port number: %s", os.Args[i])
+			log.Fatalf("Invalid port number: %s", arg)
 		}
 		ports = append(ports, port)
 	}

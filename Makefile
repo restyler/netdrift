@@ -17,7 +17,7 @@ build-faulty:
 
 # Run the main proxy server
 run-proxy: build
-	./bin/proxy
+	./bin/proxy -config configs/us.json
 
 # Run test proxy servers on ports 3025 and 3026
 run-test-proxies: build-test

@@ -145,7 +145,7 @@ start_main_proxy() {
         return 1
     fi
     
-    ./bin/proxy $PROXY_CONFIG > proxy.log 2>&1 &
+    ./bin/proxy -config "$PROXY_CONFIG" > proxy.log 2>&1 &
     local proxy_pid=$!
     PIDS+=($proxy_pid)
     PID_FILES+=("proxy.pid")
