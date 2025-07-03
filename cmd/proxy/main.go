@@ -58,11 +58,14 @@ type TimeWindowStats struct {
 }
 
 type ProxyServer struct {
-	config     *Config
-	upstreams  []string
-	currentIdx int
-	mutex      sync.Mutex
-	stats      struct {
+	config         *Config
+	configPath     string
+	configModTime  time.Time
+	upstreams      []string
+	currentIdx     int
+	mutex          sync.RWMutex
+	reloadMutex    sync.Mutex
+	stats          struct {
 		StartTime       time.Time
 		TotalRequests   int64
 		SuccessRequests int64
@@ -79,9 +82,15 @@ type ProxyServer struct {
 	}
 }
 
-func NewProxyServer(config *Config) *ProxyServer {
+func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	ps := &ProxyServer{
-		config: config,
+		config:     config,
+		configPath: configPath,
+	}
+	
+	// Get initial config file modification time
+	if stat, err := os.Stat(configPath); err == nil {
+		ps.configModTime = stat.ModTime()
 	}
 
 	// Initialize stats
@@ -109,21 +118,136 @@ func NewProxyServer(config *Config) *ProxyServer {
 	return ps
 }
 
-func (ps *ProxyServer) getNextUpstream() string {
+func (ps *ProxyServer) reloadConfig() error {
+	ps.reloadMutex.Lock()
+	defer ps.reloadMutex.Unlock()
+	
+	// Check if config file has been modified
+	stat, err := os.Stat(ps.configPath)
+	if err != nil {
+		return fmt.Errorf("failed to stat config file: %v", err)
+	}
+	
+	if !stat.ModTime().After(ps.configModTime) {
+		// File hasn't been modified
+		return nil
+	}
+	
+	log.Printf("Config file modified, reloading configuration from %s", ps.configPath)
+	
+	// Load new configuration
+	newConfig, err := loadConfig(ps.configPath)
+	if err != nil {
+		log.Printf("Failed to reload config: %v", err)
+		return fmt.Errorf("failed to reload config: %v", err)
+	}
+	
+	// Update configuration with write lock
 	ps.mutex.Lock()
 	defer ps.mutex.Unlock()
+	
+	ps.config = newConfig
+	ps.configModTime = stat.ModTime()
+	
+	// Rebuild upstream list
+	oldUpstreams := ps.upstreams
+	ps.upstreams = nil
+	ps.currentIdx = 0
+	
+	// Initialize new upstream metrics
+	newUpstreamMetrics := make(map[string]*UpstreamStats)
+	
+	for _, upstream := range newConfig.UpstreamProxies {
+		if upstream.Enabled {
+			ps.upstreams = append(ps.upstreams, upstream.URL)
+			
+			// Preserve existing metrics or create new ones
+			if existingMetrics, exists := ps.stats.UpstreamMetrics[upstream.URL]; exists {
+				newUpstreamMetrics[upstream.URL] = existingMetrics
+			} else {
+				newUpstreamMetrics[upstream.URL] = &UpstreamStats{
+					URL:         upstream.URL,
+					LastRequest: time.Now(),
+				}
+			}
+		}
+	}
+	
+	ps.stats.UpstreamMetrics = newUpstreamMetrics
+	
+	log.Printf("Configuration reloaded successfully:")
+	log.Printf("  - Server: %s", newConfig.Server.Name)
+	log.Printf("  - Authentication: %t", newConfig.Authentication.Enabled)
+	log.Printf("  - Upstream proxies: %d enabled (was %d)", len(ps.upstreams), len(oldUpstreams))
+	
+	// Log upstream changes
+	for _, upstream := range ps.upstreams {
+		found := false
+		for _, oldUpstream := range oldUpstreams {
+			if oldUpstream == upstream {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("  + Added upstream: %s", upstream)
+		}
+	}
+	
+	for _, oldUpstream := range oldUpstreams {
+		found := false
+		for _, upstream := range ps.upstreams {
+			if upstream == oldUpstream {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("  - Removed upstream: %s", oldUpstream)
+		}
+	}
+	
+	return nil
+}
+
+func (ps *ProxyServer) startConfigWatcher() {
+	ticker := time.NewTicker(1 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := ps.reloadConfig(); err != nil {
+				log.Printf("Config reload error: %v", err)
+			}
+		}
+	}()
+	log.Printf("Config file watcher started (checking every 1 minute)")
+}
+
+func (ps *ProxyServer) getNextUpstream() string {
+	ps.mutex.RLock()
+	defer ps.mutex.RUnlock()
 
 	if len(ps.upstreams) == 0 {
 		return ""
 	}
 
+	// Use atomic operation for thread-safe index increment
+	ps.mutex.RUnlock()
+	ps.mutex.Lock()
 	upstream := ps.upstreams[ps.currentIdx]
 	ps.currentIdx = (ps.currentIdx + 1) % len(ps.upstreams)
+	ps.mutex.Unlock()
+	ps.mutex.RLock()
+	
 	return upstream
 }
 
 func (ps *ProxyServer) authenticate(r *http.Request) bool {
-	if !ps.config.Authentication.Enabled {
+	ps.mutex.RLock()
+	config := ps.config
+	ps.mutex.RUnlock()
+	
+	if !config.Authentication.Enabled {
 		log.Printf("Authentication disabled, allowing request")
 		return true
 	}
@@ -160,7 +284,7 @@ func (ps *ProxyServer) authenticate(r *http.Request) bool {
 	username, password := parts[0], parts[1]
 	log.Printf("Authentication attempt for user: %s", username)
 
-	for _, user := range ps.config.Authentication.Users {
+	for _, user := range config.Authentication.Users {
 		if user.Username == username && user.Password == password {
 			log.Printf("Authentication successful for user: %s", username)
 			return true
@@ -387,6 +511,10 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	ps.mutex.RLock()
+	startTime := ps.stats.StartTime
+	ps.mutex.RUnlock()
+
 	stats := struct {
 		StartTime       time.Time       `json:"start_time"`
 		Uptime          string          `json:"uptime"`
@@ -394,9 +522,9 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		RecentStats     TimeWindowStats `json:"recent_15m"`
 		CurrentRequests int64           `json:"current_requests"`
 	}{
-		StartTime:       ps.stats.StartTime,
-		Uptime:          time.Since(ps.stats.StartTime).String(),
-		TotalStats:      ps.getTimeWindowStats(time.Since(ps.stats.StartTime)),
+		StartTime:       startTime,
+		Uptime:          time.Since(startTime).String(),
+		TotalStats:      ps.getTimeWindowStats(time.Since(startTime)),
 		RecentStats:     ps.getTimeWindowStats(15 * time.Minute),
 		CurrentRequests: atomic.LoadInt64(&ps.stats.CurrentRequests),
 	}
@@ -405,7 +533,11 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ps *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == ps.config.Server.StatsEndpoint {
+	ps.mutex.RLock()
+	statsEndpoint := ps.config.Server.StatsEndpoint
+	ps.mutex.RUnlock()
+	
+	if r.URL.Path == statsEndpoint {
 		ps.handleStats(w, r)
 		return
 	}
@@ -480,7 +612,10 @@ func main() {
 
 	log.Printf("Starting %s on %s", config.Server.Name, config.Server.ListenAddress)
 
-	proxyServer := NewProxyServer(config)
+	proxyServer := NewProxyServer(config, configPath)
+
+	// Start config file watcher
+	proxyServer.startConfigWatcher()
 
 	server := &http.Server{
 		Addr:    config.Server.ListenAddress,
