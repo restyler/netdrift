@@ -6,7 +6,11 @@ build:
 
 # Build the test proxy servers
 build-test:
-	go build -o test-proxy ./pkg/proxy/test_proxy.go
+	go build -o test-proxy ./cmd/test-proxy
+
+# Build the faulty proxy server
+build-faulty:
+	go build -o faulty-proxy ./cmd/faulty-proxy
 
 # Run the main proxy server
 run-proxy: build
@@ -23,9 +27,25 @@ test:
 	@echo "\n\nChecking stats..."
 	curl http://127.0.0.1:3130/stats
 
+# Run Go tests for the main proxy
+test-unit:
+	go test -v ./cmd/proxy/...
+
+# Run tests for faulty proxy package only
+test-faultyproxy:
+	go test -v ./pkg/faultyproxy
+
+# Run comprehensive faulty proxy test suite
+test-faultyproxy-full:
+	./scripts/test-faultyproxy.sh all
+
+# Run faulty proxy benchmarks
+test-faultyproxy-bench:
+	./scripts/test-faultyproxy.sh benchmarks
+
 # Clean build artifacts
 clean:
-	rm -f proxy test-proxy
+	rm -f proxy test-proxy faulty-proxy
 
 # Docker build
 docker-build:

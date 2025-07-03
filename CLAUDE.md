@@ -25,6 +25,7 @@ The proxy works by:
 ```bash
 make build          # Build main proxy server
 make build-test     # Build test proxy servers
+make build-faulty   # Build faulty proxy server
 make clean          # Clean build artifacts
 ```
 
@@ -33,6 +34,10 @@ make clean          # Clean build artifacts
 make run-proxy           # Run main proxy server
 make run-test-proxies    # Run test proxy servers on ports 3025 and 3026
 make test               # Test proxy with curl
+make test-unit          # Run unit tests for main proxy
+make test-faultyproxy   # Run faulty proxy tests only
+make test-faultyproxy-full  # Run comprehensive faulty proxy test suite
+make test-faultyproxy-bench # Run faulty proxy benchmarks
 ```
 
 ### Docker Commands
@@ -47,7 +52,12 @@ make docker-run      # Run Docker container
 go run ./cmd/proxy
 
 # Run test proxies
-go run ./pkg/proxy/test_proxy.go 3025 3026
+go run ./cmd/test-proxy 3025 3026
+
+# Run faulty proxy with different configurations
+./faulty-proxy -port 8081 -failure-rate 0.3 -fault-type reset
+./faulty-proxy -port 8082 -latency 2s -jitter 500ms -fault-type slow
+./faulty-proxy -port 8083 -failure-rate 0.1 -fault-type timeout
 
 # Test with authentication
 curl -x http://proxyuser:Proxy234@127.0.0.1:3130 https://myip.scrapeninja.net
@@ -73,10 +83,60 @@ The proxy provides detailed statistics at the `/stats` endpoint including:
 
 ## Testing
 
+### Regular Testing
 Use the built-in test proxies for development:
 1. Start test proxies: `make run-test-proxies`
 2. Start main proxy: `make run-proxy`
 3. Test functionality: `make test`
+
+### Unit Testing
+Run unit tests for the main proxy package:
+```bash
+make test-unit
+```
+
+### Faulty Proxy Testing
+The faulty proxy has its own isolated test suite with comprehensive testing:
+
+```bash
+# Quick unit tests only
+make test-faultyproxy
+
+# Full test suite (unit, integration, benchmarks, coverage)
+make test-faultyproxy-full
+
+# Performance benchmarks only
+make test-faultyproxy-bench
+
+# Manual testing with different fault modes
+make build-faulty
+./faulty-proxy -help                                    # Show all options
+./faulty-proxy -port 8081 -failure-rate 0.5 -fault-type reset
+./faulty-proxy -port 8082 -latency 2s -fault-type slow
+./faulty-proxy -port 8083 -failure-rate 0.2 -fault-type timeout
+
+# Advanced test script usage
+./scripts/test-faultyproxy.sh unit        # Unit tests only
+./scripts/test-faultyproxy.sh integration # Integration tests only
+./scripts/test-faultyproxy.sh coverage    # Coverage analysis
+./scripts/test-faultyproxy.sh race        # Race condition detection
+```
+
+**Faulty Proxy Package Features:**
+- **Isolated testing**: Separate from main netdrift package
+- **Comprehensive test types**: Unit, integration, benchmarks, examples
+- **Coverage analysis**: HTML coverage reports
+- **Race detection**: Concurrent safety testing
+- **Load testing**: Performance under stress
+- **Example-driven documentation**: Runnable code examples
+
+Available fault types:
+- `none`: No faults (normal behavior)
+- `slow`: Slow responses with configurable latency
+- `reset`: Random connection resets
+- `timeout`: Hang connections (31s timeout)
+- `bad-gateway`: Return 502 errors
+- `internal-error`: Return 500 errors
 
 ## Go Module
 
