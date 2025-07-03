@@ -15,12 +15,12 @@
     },
     "upstream_proxies": [
       {
-        "url": "http://127.0.0.1:1025",
+        "url": "http://127.0.0.1:3025",
         "enabled": true,
         "weight": 1
       },
       {
-        "url": "http://127.0.0.1:1026",
+        "url": "http://127.0.0.1:3026",
         "enabled": true,
         "weight": 1
       }

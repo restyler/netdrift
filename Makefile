@@ -2,19 +2,19 @@
 
 # Build the main proxy server
 build:
-	go build -o proxy main.go
+	go build -o proxy ./cmd/proxy
 
 # Build the test proxy servers
 build-test:
-	go build -o test-proxy test_proxy.go
+	go build -o test-proxy ./pkg/proxy/test_proxy.go
 
 # Run the main proxy server
 run-proxy: build
 	./proxy
 
-# Run test proxy servers on ports 1025 and 1026
+# Run test proxy servers on ports 3025 and 3026
 run-test-proxies: build-test
-	./test-proxy 1025 1026
+	./test-proxy 3025 3026
 
 # Test the proxy with curl
 test:
@@ -29,8 +29,8 @@ clean:
 
 # Docker build
 docker-build:
-	docker build -t 4proxy .
+	docker build -t netdrift .
 
 # Docker run
 docker-run:
-	docker run -p 3130:3130 4proxy 
+	docker run -p 3130:3130 netdrift 

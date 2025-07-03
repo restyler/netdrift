@@ -266,7 +266,9 @@ func loadConfig(filename string) (*Config, error) {
 
 func main() {
 	configFile := "us.json"
-	if len(os.Args) > 1 {
+	if envConfig := os.Getenv("PROXY_CONFIG"); envConfig != "" {
+		configFile = envConfig
+	} else if len(os.Args) > 1 {
 		configFile = os.Args[1]
 	}
 

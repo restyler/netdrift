@@ -8,6 +8,9 @@ test-proxy
 *.so
 *.dylib
 
+# Log files
+*.log
+
 # IDE files
 .idea/
 .vscode/
