@@ -1,3 +1,3 @@
-module 4proxy
+module netdrift
 
 go 1.21
