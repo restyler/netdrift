@@ -39,5 +39,5 @@ RUN chmod +x ./bin/proxy ./bin/test-proxy
 # Expose proxy ports
 EXPOSE 3130 3025 3026
 
-# Default command (can be overridden in docker-compose)
+# Default command (can be overridden in docker compose)
 CMD ["./bin/proxy", "-config", "/app/configs/docker.json"]

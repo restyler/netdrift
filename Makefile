@@ -66,26 +66,26 @@ docker-prod:
 	docker build -t netdrift-prod .
 
 docker-prod-up:
-	docker-compose -f docker-compose.prod.yml up -d
+	docker compose -f docker-compose.prod.yml up -d
 
 docker-prod-down:
-	docker-compose -f docker-compose.prod.yml down
+	docker compose -f docker-compose.prod.yml down
 
 docker-prod-logs:
-	docker-compose -f docker-compose.prod.yml logs -f
+	docker compose -f docker-compose.prod.yml logs -f
 
 # Test Docker commands  
 docker-test:
 	docker build -f Dockerfile.test -t netdrift-test .
 
 docker-test-up:
-	docker-compose -f docker-compose.test.yml up -d
+	docker compose -f docker-compose.test.yml up -d
 
 docker-test-down:
-	docker-compose -f docker-compose.test.yml down
+	docker compose -f docker-compose.test.yml down
 
 docker-test-logs:
-	docker-compose -f docker-compose.test.yml logs -f
+	docker compose -f docker-compose.test.yml logs -f
 
 # Legacy/convenience commands (use production)
 docker-up: docker-prod-up
@@ -94,6 +94,6 @@ docker-logs: docker-prod-logs
 
 # Cleanup commands
 docker-clean:
-	docker-compose -f docker-compose.prod.yml down -v --remove-orphans || true
-	docker-compose -f docker-compose.test.yml down -v --remove-orphans || true
+	docker compose -f docker-compose.prod.yml down -v --remove-orphans || true
+	docker compose -f docker-compose.test.yml down -v --remove-orphans || true
 	docker system prune -f 
