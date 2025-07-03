@@ -1,4 +1,4 @@
-.PHONY: build run-proxy run-test-proxies test clean
+.PHONY: build run-proxy run-test-proxies test test-integration clean
 
 # Build the main proxy server
 build:
@@ -30,6 +30,10 @@ test:
 # Run Go tests for the main proxy
 test-unit:
 	go test -v ./cmd/proxy/...
+
+# Run comprehensive integration test (build, start, test, cleanup)
+test-integration:
+	./scripts/test-runner.sh
 
 # Run tests for faulty proxy package only
 test-faultyproxy:

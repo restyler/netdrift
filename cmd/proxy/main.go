@@ -433,7 +433,22 @@ func loadConfig(filename string) (*Config, error) {
 	return &config, nil
 }
 
+func writePidFile() {
+	pidFile := "proxy.pid"
+	file, err := os.Create(pidFile)
+	if err != nil {
+		log.Printf("Failed to create PID file %s: %v", pidFile, err)
+		return
+	}
+	defer file.Close()
+	
+	fmt.Fprintf(file, "%d\n", os.Getpid())
+	log.Printf("PID file created: %s", pidFile)
+}
+
 func main() {
+	writePidFile()
+	
 	configFile := "us.json"
 	if envConfig := os.Getenv("PROXY_CONFIG"); envConfig != "" {
 		configFile = envConfig
