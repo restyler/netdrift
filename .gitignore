@@ -1,0 +1,16 @@
+# Binary files
+proxy
+test-proxy
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE files
+.idea/
+.vscode/
+
+# OS files
+.DS_Store 

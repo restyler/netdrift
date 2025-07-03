@@ -1,0 +1,28 @@
+{
+    "server": {
+      "name": "US Proxy Pool",
+      "listen_address": "127.0.0.1:3130",
+      "stats_endpoint": "/stats"
+    },
+    "authentication": {
+      "enabled": true,
+      "users": [
+        {
+          "username": "proxyuser",
+          "password": "Proxy234"
+        }
+      ]
+    },
+    "upstream_proxies": [
+      {
+        "url": "http://127.0.0.1:1025",
+        "enabled": true,
+        "weight": 1
+      },
+      {
+        "url": "http://127.0.0.1:1026",
+        "enabled": true,
+        "weight": 1
+      }
+    ]
+  } 
