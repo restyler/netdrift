@@ -116,7 +116,7 @@ build_binaries() {
 start_test_proxies() {
     log "Starting test proxies on ports: $TEST_PROXY_PORTS"
     
-    ./test-proxy $TEST_PROXY_PORTS > test-proxies.log 2>&1 &
+    ./bin/test-proxy $TEST_PROXY_PORTS > test-proxies.log 2>&1 &
     local test_proxy_pid=$!
     PIDS+=($test_proxy_pid)
     
@@ -145,7 +145,7 @@ start_main_proxy() {
         return 1
     fi
     
-    ./proxy $PROXY_CONFIG > proxy.log 2>&1 &
+    ./bin/proxy $PROXY_CONFIG > proxy.log 2>&1 &
     local proxy_pid=$!
     PIDS+=($proxy_pid)
     PID_FILES+=("proxy.pid")

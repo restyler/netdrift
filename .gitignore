@@ -1,6 +1,3 @@
-# Binary files
-proxy
-test-proxy
 
 # Build artifacts
 *.exe
@@ -16,4 +13,4 @@ test-proxy
 .vscode/
 
 # OS files
-.DS_Store 
+.DS_Store bin/

@@ -2,23 +2,26 @@
 
 # Build the main proxy server
 build:
-	go build -o proxy ./cmd/proxy
+	mkdir -p bin
+	go build -o bin/proxy ./cmd/proxy
 
 # Build the test proxy servers
 build-test:
-	go build -o test-proxy ./cmd/test-proxy
+	mkdir -p bin
+	go build -o bin/test-proxy ./cmd/test-proxy
 
 # Build the faulty proxy server
 build-faulty:
-	go build -o faulty-proxy ./cmd/faulty-proxy
+	mkdir -p bin
+	go build -o bin/faulty-proxy ./cmd/faulty-proxy
 
 # Run the main proxy server
 run-proxy: build
-	./proxy
+	./bin/proxy
 
 # Run test proxy servers on ports 3025 and 3026
 run-test-proxies: build-test
-	./test-proxy 3025 3026
+	./bin/test-proxy 3025 3026
 
 # Test the proxy with curl
 test:
@@ -49,7 +52,8 @@ test-faultyproxy-bench:
 
 # Clean build artifacts
 clean:
-	rm -f proxy test-proxy faulty-proxy
+	rm -rf bin
+	rm -f proxy test-proxy faulty-proxy  # Legacy cleanup
 
 # Docker build
 docker-build:
