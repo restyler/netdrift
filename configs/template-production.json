@@ -1,0 +1,28 @@
+{
+  "server": {
+    "name": "Netdrift Docker Proxy Pool",
+    "listen_address": "0.0.0.0:3130",
+    "stats_endpoint": "/stats"
+  },
+  "authentication": {
+    "enabled": true,
+    "users": [
+      {
+        "username": "admin",
+        "password": "CHANGE_THIS_PASSWORD"
+      }
+    ]
+  },
+  "upstream_proxies": [
+    {
+      "url": "http://your-proxy-server:port",
+      "enabled": true,
+      "weight": 1
+    },
+    {
+      "url": "http://username:password@proxy-with-auth:port",
+      "enabled": true,
+      "weight": 1
+    }
+  ]
+} 

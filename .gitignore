@@ -14,4 +14,15 @@ bin/
 .vscode/
 
 # OS files
-.DS_Store bin/
+.DS_Store
+
+# Configuration files (actual configs with sensitive data)
+# Templates are tracked as template-*.json, actual configs are *.json
+configs/*.json
+!configs/template-*.json
+
+# Local docker-compose (use docker-compose.prod.yml or docker-compose.test.yml instead)
+docker-compose.yml
+
+# PID files
+*.pid

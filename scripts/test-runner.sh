@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # Configuration
 TEST_PROXY_PORTS="3025 3026"
 MAIN_PROXY_PORT="3130"
-PROXY_CONFIG="configs/us.json"
+PROXY_CONFIG="configs/template-us.json"
 TIMEOUT=30
 
 # PID tracking
