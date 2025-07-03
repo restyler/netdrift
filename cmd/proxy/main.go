@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,15 +35,46 @@ type Config struct {
 	} `json:"upstream_proxies"`
 }
 
+type UpstreamStats struct {
+	URL                string    `json:"url"`
+	TotalRequests      int64     `json:"total_requests"`
+	SuccessRequests    int64     `json:"success_requests"`
+	FailedRequests     int64     `json:"failed_requests"`
+	TotalLatency       int64     `json:"total_latency_ms"`
+	AvgLatency         float64   `json:"avg_latency_ms"`
+	CurrentConnections int64     `json:"current_connections"`
+	LastRequest        time.Time `json:"last_request"`
+}
+
+type TimeWindowStats struct {
+	Window          string          `json:"window"`
+	TotalRequests   int64           `json:"total_requests"`
+	SuccessRequests int64           `json:"success_requests"`
+	FailedRequests  int64           `json:"failed_requests"`
+	AvgLatency      float64         `json:"avg_latency_ms"`
+	MaxConcurrency  int64           `json:"max_concurrency"`
+	UpstreamMetrics []UpstreamStats `json:"upstream_metrics"`
+}
+
 type ProxyServer struct {
 	config     *Config
 	upstreams  []string
 	currentIdx int
 	mutex      sync.Mutex
 	stats      struct {
+		StartTime       time.Time
 		TotalRequests   int64
 		SuccessRequests int64
 		FailedRequests  int64
+		CurrentRequests int64
+		MaxConcurrency  int64
+		UpstreamMetrics map[string]*UpstreamStats
+		RecentRequests  []struct {
+			Timestamp time.Time
+			Upstream  string
+			Latency   int64
+			Success   bool
+		}
 	}
 }
 
@@ -51,10 +83,24 @@ func NewProxyServer(config *Config) *ProxyServer {
 		config: config,
 	}
 
+	// Initialize stats
+	ps.stats.StartTime = time.Now()
+	ps.stats.UpstreamMetrics = make(map[string]*UpstreamStats)
+	ps.stats.RecentRequests = make([]struct {
+		Timestamp time.Time
+		Upstream  string
+		Latency   int64
+		Success   bool
+	}, 0)
+
 	// Build list of enabled upstream proxies
 	for _, upstream := range config.UpstreamProxies {
 		if upstream.Enabled {
 			ps.upstreams = append(ps.upstreams, upstream.URL)
+			ps.stats.UpstreamMetrics[upstream.URL] = &UpstreamStats{
+				URL:         upstream.URL,
+				LastRequest: time.Now(),
+			}
 		}
 	}
 
@@ -125,34 +171,46 @@ func (ps *ProxyServer) authenticate(r *http.Request) bool {
 }
 
 func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
-	ps.stats.TotalRequests++
+	startTime := time.Now()
 
-	log.Printf("CONNECT request to %s from %s", r.Host, r.RemoteAddr)
+	// Increment current requests and update max concurrency
+	currentReqs := atomic.AddInt64(&ps.stats.CurrentRequests, 1)
+	for {
+		maxConcurrency := atomic.LoadInt64(&ps.stats.MaxConcurrency)
+		if currentReqs <= maxConcurrency || atomic.CompareAndSwapInt64(&ps.stats.MaxConcurrency, maxConcurrency, currentReqs) {
+			break
+		}
+	}
+	defer atomic.AddInt64(&ps.stats.CurrentRequests, -1)
+
+	atomic.AddInt64(&ps.stats.TotalRequests, 1)
 
 	if !ps.authenticate(r) {
-		log.Printf("Authentication failed for %s", r.RemoteAddr)
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		w.Header().Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
 		http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-		ps.stats.FailedRequests++
 		return
 	}
 
 	upstream := ps.getNextUpstream()
 	if upstream == "" {
-		log.Printf("No upstream proxies available")
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		http.Error(w, "No upstream proxies available", http.StatusBadGateway)
-		ps.stats.FailedRequests++
 		return
 	}
 
-	log.Printf("Using upstream proxy: %s", upstream)
+	// Update upstream stats
+	upstreamStats := ps.stats.UpstreamMetrics[upstream]
+	atomic.AddInt64(&upstreamStats.TotalRequests, 1)
+	atomic.AddInt64(&upstreamStats.CurrentConnections, 1)
+	defer atomic.AddInt64(&upstreamStats.CurrentConnections, -1)
 
 	// Connect to upstream proxy
 	upstreamConn, err := net.DialTimeout("tcp", strings.TrimPrefix(upstream, "http://"), 30*time.Second)
 	if err != nil {
-		log.Printf("Failed to connect to upstream %s: %v", upstream, err)
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		http.Error(w, "Failed to connect to upstream proxy", http.StatusBadGateway)
-		ps.stats.FailedRequests++
 		return
 	}
 	defer upstreamConn.Close()
@@ -162,7 +220,8 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if _, err := upstreamConn.Write([]byte(connectReq)); err != nil {
 		log.Printf("Failed to send CONNECT to upstream: %v", err)
 		http.Error(w, "Failed to connect", http.StatusBadGateway)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 
@@ -172,7 +231,8 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to read response from upstream: %v", err)
 		http.Error(w, "Failed to connect", http.StatusBadGateway)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 
@@ -180,7 +240,8 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(responseStr, "200") {
 		log.Printf("Upstream proxy rejected connection: %s", strings.TrimSpace(responseStr))
 		http.Error(w, "Upstream proxy rejected connection", http.StatusBadGateway)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 
@@ -189,7 +250,8 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		log.Printf("ResponseWriter doesn't support hijacking")
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 
@@ -197,7 +259,8 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Failed to hijack connection: %v", err)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 	defer clientConn.Close()
@@ -205,12 +268,46 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Send 200 Connection Established to client
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
 		log.Printf("Failed to send 200 to client: %v", err)
-		ps.stats.FailedRequests++
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		return
 	}
 
 	log.Printf("Established tunnel between client and %s via %s", r.Host, upstream)
-	ps.stats.SuccessRequests++
+	atomic.AddInt64(&ps.stats.SuccessRequests, 1)
+	atomic.AddInt64(&upstreamStats.SuccessRequests, 1)
+
+	// Update stats after successful connection
+	elapsed := time.Since(startTime).Milliseconds()
+	atomic.AddInt64(&upstreamStats.TotalLatency, elapsed)
+	atomic.AddInt64(&upstreamStats.TotalLatency, elapsed)
+
+	ps.mutex.Lock()
+	upstreamStats.LastRequest = time.Now()
+	upstreamStats.AvgLatency = float64(upstreamStats.TotalLatency) / float64(upstreamStats.SuccessRequests)
+
+	// Add to recent requests
+	ps.stats.RecentRequests = append(ps.stats.RecentRequests, struct {
+		Timestamp time.Time
+		Upstream  string
+		Latency   int64
+		Success   bool
+	}{
+		Timestamp: time.Now(),
+		Upstream:  upstream,
+		Latency:   elapsed,
+		Success:   true,
+	})
+
+	// Trim old requests (keep last 15 minutes)
+	cutoff := time.Now().Add(-15 * time.Minute)
+	for i, req := range ps.stats.RecentRequests {
+		if req.Timestamp.After(cutoff) {
+			ps.stats.RecentRequests = ps.stats.RecentRequests[i:]
+			break
+		}
+	}
+	ps.mutex.Unlock()
 
 	// Start bidirectional copying
 	go func() {
@@ -222,15 +319,87 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	io.Copy(clientConn, upstreamConn)
 }
 
+func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats {
+	ps.mutex.Lock()
+	defer ps.mutex.Unlock()
+
+	cutoff := time.Now().Add(-window)
+	stats := TimeWindowStats{
+		Window:          window.String(),
+		UpstreamMetrics: make([]UpstreamStats, 0),
+	}
+
+	// Initialize per-upstream stats
+	upstreamStats := make(map[string]*UpstreamStats)
+	for _, upstream := range ps.upstreams {
+		upstreamStats[upstream] = &UpstreamStats{
+			URL: upstream,
+		}
+	}
+
+	var totalLatency int64
+	maxConcurrent := int64(0)
+
+	// Process recent requests
+	for _, req := range ps.stats.RecentRequests {
+		if req.Timestamp.Before(cutoff) {
+			continue
+		}
+
+		stats.TotalRequests++
+		if req.Success {
+			stats.SuccessRequests++
+			totalLatency += req.Latency
+		} else {
+			stats.FailedRequests++
+		}
+
+		// Update upstream-specific stats
+		upstream := upstreamStats[req.Upstream]
+		upstream.TotalRequests++
+		if req.Success {
+			upstream.SuccessRequests++
+			upstream.TotalLatency += req.Latency
+		} else {
+			upstream.FailedRequests++
+		}
+	}
+
+	// Calculate averages and add upstream stats
+	if stats.SuccessRequests > 0 {
+		stats.AvgLatency = float64(totalLatency) / float64(stats.SuccessRequests)
+	}
+	stats.MaxConcurrency = maxConcurrent
+
+	for _, upstream := range ps.upstreams {
+		us := upstreamStats[upstream]
+		if us.SuccessRequests > 0 {
+			us.AvgLatency = float64(us.TotalLatency) / float64(us.SuccessRequests)
+		}
+		us.CurrentConnections = ps.stats.UpstreamMetrics[upstream].CurrentConnections
+		stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
+	}
+
+	return stats
+}
+
 func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	stats := map[string]interface{}{
-		"total_requests":   ps.stats.TotalRequests,
-		"success_requests": ps.stats.SuccessRequests,
-		"failed_requests":  ps.stats.FailedRequests,
-		"upstream_proxies": ps.upstreams,
-		"current_upstream": ps.currentIdx,
+
+	stats := struct {
+		StartTime       time.Time       `json:"start_time"`
+		Uptime          string          `json:"uptime"`
+		TotalStats      TimeWindowStats `json:"total"`
+		RecentStats     TimeWindowStats `json:"recent_15m"`
+		CurrentRequests int64           `json:"current_requests"`
+	}{
+		StartTime:       ps.stats.StartTime,
+		Uptime:          time.Since(ps.stats.StartTime).String(),
+		TotalStats:      ps.getTimeWindowStats(time.Since(ps.stats.StartTime)),
+		RecentStats:     ps.getTimeWindowStats(15 * time.Minute),
+		CurrentRequests: atomic.LoadInt64(&ps.stats.CurrentRequests),
 	}
+
 	json.NewEncoder(w).Encode(stats)
 }
 
