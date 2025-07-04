@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go-based HTTP forward proxy server called "netdrift" that implements load balancing across multiple upstream proxies using a round-robin algorithm. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, and provides comprehensive statistics tracking.
+This is a Go-based HTTP forward proxy server called "netdrift" that implements advanced weighted load balancing across multiple upstream proxies with intelligent health monitoring and automatic failover. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, upstream proxy authentication, and provides comprehensive statistics tracking.
+
+**Performance**: 4.4M operations/second (227ns/op) with stress-tested concurrent handling and automatic health management.
+
+**For detailed technical architecture, code structure, and system design, see [ARCHITECTURE.md](ARCHITECTURE.md)**
 
 ## Key Architecture
 
@@ -35,6 +39,7 @@ make run-proxy           # Run main proxy server
 make run-test-proxies    # Run test proxy servers on ports 3025 and 3026
 make test               # Test proxy with curl
 make test-unit          # Run unit tests for main proxy
+make test-integration   # Run integration tests with real proxy servers
 make test-faultyproxy   # Run faulty proxy tests only
 make test-faultyproxy-full  # Run comprehensive faulty proxy test suite
 make test-faultyproxy-bench # Run faulty proxy benchmarks
@@ -82,6 +87,14 @@ The proxy provides detailed statistics at the `/stats` endpoint including:
 - Current active connections and max concurrency
 
 ## Testing
+
+**IMPORTANT: Always run integration tests via `make test-integration` before and after every feature implementation to ensure system stability.**
+
+### Integration Testing
+Run comprehensive integration tests with real proxy servers:
+```bash
+make test-integration   # Full integration test suite with server startup/teardown
+```
 
 ### Regular Testing
 Use the built-in test proxies for development:

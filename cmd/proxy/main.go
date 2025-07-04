@@ -47,6 +47,21 @@ type UpstreamStats struct {
 	LastRequest        time.Time `json:"last_request"`
 }
 
+type UpstreamHealth struct {
+	FailureCount      int64     `json:"failure_count"`
+	SuccessCount      int64     `json:"success_count"`
+	LastFailure       time.Time `json:"last_failure"`
+	LastSuccess       time.Time `json:"last_success"`
+	IsHealthy         bool      `json:"is_healthy"`
+	FailureThreshold  int       `json:"failure_threshold"`
+	RecoveryThreshold int       `json:"recovery_threshold"`
+}
+
+type WeightedUpstream struct {
+	URL    string
+	Weight int
+}
+
 type TimeWindowStats struct {
 	Window          string          `json:"window"`
 	TotalRequests   int64           `json:"total_requests"`
@@ -58,14 +73,18 @@ type TimeWindowStats struct {
 }
 
 type ProxyServer struct {
-	config         *Config
-	configPath     string
-	configModTime  time.Time
-	upstreams      []string
-	currentIdx     int
-	mutex          sync.RWMutex
-	reloadMutex    sync.Mutex
-	stats          struct {
+	config           *Config
+	configPath       string
+	configModTime    time.Time
+	upstreams        []string
+	weightedUpstreams []WeightedUpstream
+	totalWeight      int
+	currentIdx       int
+	mutex            sync.RWMutex
+	reloadMutex      sync.Mutex
+	healthMutex      sync.RWMutex
+	upstreamHealth   map[string]*UpstreamHealth
+	stats            struct {
 		StartTime       time.Time
 		TotalRequests   int64
 		SuccessRequests int64
@@ -84,8 +103,9 @@ type ProxyServer struct {
 
 func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	ps := &ProxyServer{
-		config:     config,
-		configPath: configPath,
+		config:         config,
+		configPath:     configPath,
+		upstreamHealth: make(map[string]*UpstreamHealth),
 	}
 	
 	// Get initial config file modification time
@@ -103,18 +123,10 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 		Success   bool
 	}, 0)
 
-	// Build list of enabled upstream proxies
-	for _, upstream := range config.UpstreamProxies {
-		if upstream.Enabled {
-			ps.upstreams = append(ps.upstreams, upstream.URL)
-			ps.stats.UpstreamMetrics[upstream.URL] = &UpstreamStats{
-				URL:         upstream.URL,
-				LastRequest: time.Now(),
-			}
-		}
-	}
+	// Build list of enabled upstream proxies with weights
+	ps.buildUpstreamLists()
 
-	log.Printf("Loaded %d upstream proxies", len(ps.upstreams))
+	log.Printf("Loaded %d upstream proxies (total weight: %d)", len(ps.upstreams), ps.totalWeight)
 	return ps
 }
 
@@ -151,29 +163,10 @@ func (ps *ProxyServer) reloadConfig() error {
 	
 	// Rebuild upstream list
 	oldUpstreams := ps.upstreams
-	ps.upstreams = nil
 	ps.currentIdx = 0
 	
-	// Initialize new upstream metrics
-	newUpstreamMetrics := make(map[string]*UpstreamStats)
-	
-	for _, upstream := range newConfig.UpstreamProxies {
-		if upstream.Enabled {
-			ps.upstreams = append(ps.upstreams, upstream.URL)
-			
-			// Preserve existing metrics or create new ones
-			if existingMetrics, exists := ps.stats.UpstreamMetrics[upstream.URL]; exists {
-				newUpstreamMetrics[upstream.URL] = existingMetrics
-			} else {
-				newUpstreamMetrics[upstream.URL] = &UpstreamStats{
-					URL:         upstream.URL,
-					LastRequest: time.Now(),
-				}
-			}
-		}
-	}
-	
-	ps.stats.UpstreamMetrics = newUpstreamMetrics
+	// Use the new build method
+	ps.buildUpstreamLists()
 	
 	log.Printf("Configuration reloaded successfully:")
 	log.Printf("  - Server: %s", newConfig.Server.Name)
@@ -223,23 +216,334 @@ func (ps *ProxyServer) startConfigWatcher() {
 	log.Printf("Config file watcher started (checking every 1 minute)")
 }
 
+// buildUpstreamLists builds the upstream lists with weights and health tracking
+func (ps *ProxyServer) buildUpstreamLists() {
+	ps.upstreams = nil
+	ps.weightedUpstreams = nil
+	ps.totalWeight = 0
+
+	for _, upstream := range ps.config.UpstreamProxies {
+		if upstream.Enabled {
+			weight := upstream.Weight
+			if weight < 0 {
+				weight = 1 // Default weight for negative weights
+			}
+			// Allow zero weights (they should be excluded from selection)
+
+			ps.upstreams = append(ps.upstreams, upstream.URL)
+			ps.weightedUpstreams = append(ps.weightedUpstreams, WeightedUpstream{
+				URL:    upstream.URL,
+				Weight: weight,
+			})
+			ps.totalWeight += weight
+
+			// Initialize upstream health if not exists
+			if _, exists := ps.upstreamHealth[upstream.URL]; !exists {
+				ps.upstreamHealth[upstream.URL] = &UpstreamHealth{
+					IsHealthy:         true,
+					FailureThreshold:  3, // Default failure threshold
+					RecoveryThreshold: 1, // Default recovery threshold
+				}
+			}
+
+			// Initialize stats if not exists
+			if _, exists := ps.stats.UpstreamMetrics[upstream.URL]; !exists {
+				ps.stats.UpstreamMetrics[upstream.URL] = &UpstreamStats{
+					URL:         upstream.URL,
+					LastRequest: time.Now(),
+				}
+			}
+		}
+	}
+}
+
 func (ps *ProxyServer) getNextUpstream() string {
 	ps.mutex.RLock()
 	defer ps.mutex.RUnlock()
+
+	if len(ps.weightedUpstreams) == 0 {
+		return ""
+	}
+
+	// Get healthy upstreams only
+	healthyUpstreams := ps.getHealthyUpstreams()
+	if len(healthyUpstreams) == 0 {
+		// Fallback: return least failed upstream if all are unhealthy
+		return ps.getLeastFailedUpstream()
+	}
+
+	// Use weighted round-robin selection
+	return ps.selectWeightedUpstream(healthyUpstreams)
+}
+
+func (ps *ProxyServer) getHealthyUpstreams() []WeightedUpstream {
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
+
+	var healthy []WeightedUpstream
+	for _, weighted := range ps.weightedUpstreams {
+		// Skip zero-weight upstreams
+		if weighted.Weight == 0 {
+			continue
+		}
+		if health, exists := ps.upstreamHealth[weighted.URL]; exists && health.IsHealthy {
+			healthy = append(healthy, weighted)
+		}
+	}
+	return healthy
+}
+
+func (ps *ProxyServer) selectWeightedUpstream(upstreams []WeightedUpstream) string {
+	if len(upstreams) == 0 {
+		return ""
+	}
+
+	if len(upstreams) == 1 {
+		return upstreams[0].URL
+	}
+
+	// Calculate total weight for healthy upstreams
+	totalWeight := 0
+	for _, upstream := range upstreams {
+		totalWeight += upstream.Weight
+	}
+
+	if totalWeight == 0 {
+		// All weights are zero, use simple round-robin
+		// This should not happen since we filter zero weights in getHealthyUpstreams
+		return upstreams[0].URL
+	}
+
+	// Get current index for weighted selection (thread-safe)
+	ps.mutex.RUnlock()
+	ps.mutex.Lock()
+	ps.currentIdx = (ps.currentIdx + 1) % totalWeight
+	targetWeight := ps.currentIdx
+	ps.mutex.Unlock()
+	ps.mutex.RLock()
+
+	// Find upstream based on weight distribution
+	currentWeight := 0
+	for _, upstream := range upstreams {
+		currentWeight += upstream.Weight
+		if targetWeight < currentWeight {
+			return upstream.URL
+		}
+	}
+
+	// Fallback to first upstream
+	return upstreams[0].URL
+}
+
+func (ps *ProxyServer) getLeastFailedUpstream() string {
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
 
 	if len(ps.upstreams) == 0 {
 		return ""
 	}
 
-	// Use atomic operation for thread-safe index increment
-	ps.mutex.RUnlock()
-	ps.mutex.Lock()
-	upstream := ps.upstreams[ps.currentIdx]
-	ps.currentIdx = (ps.currentIdx + 1) % len(ps.upstreams)
-	ps.mutex.Unlock()
-	ps.mutex.RLock()
+	leastFailed := ps.upstreams[0]
+	minFailures := int64(999999)
+
+	for _, upstream := range ps.upstreams {
+		if health, exists := ps.upstreamHealth[upstream]; exists {
+			if health.FailureCount < minFailures {
+				minFailures = health.FailureCount
+				leastFailed = upstream
+			}
+		}
+	}
+
+	return leastFailed
+}
+
+// Health management methods
+func (ps *ProxyServer) recordUpstreamFailure(upstream string) {
+	ps.healthMutex.Lock()
+	defer ps.healthMutex.Unlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		health = &UpstreamHealth{
+			IsHealthy:         true,
+			FailureThreshold:  3,
+			RecoveryThreshold: 1,
+		}
+		ps.upstreamHealth[upstream] = health
+	}
+
+	health.FailureCount++
+	health.LastFailure = time.Now()
+
+	// Check if upstream should be marked unhealthy
+	if health.FailureCount >= int64(health.FailureThreshold) {
+		health.IsHealthy = false
+	}
+}
+
+func (ps *ProxyServer) recordUpstreamSuccess(upstream string) {
+	ps.healthMutex.Lock()
+	defer ps.healthMutex.Unlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		health = &UpstreamHealth{
+			IsHealthy:         true,
+			FailureThreshold:  3,
+			RecoveryThreshold: 1,
+		}
+		ps.upstreamHealth[upstream] = health
+	}
+
+	health.SuccessCount++
+	health.LastSuccess = time.Now()
+
+	// Check if upstream should recover
+	if !health.IsHealthy {
+		// Reset failure count on success to allow recovery
+		health.FailureCount = 0
+		health.IsHealthy = true
+	}
+}
+
+func (ps *ProxyServer) isUpstreamHealthy(upstream string) bool {
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		return true // Assume healthy if no health record
+	}
+
+	return health.IsHealthy
+}
+
+func (ps *ProxyServer) getUpstreamFailureCount(upstream string) int {
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		return 0
+	}
+
+	return int(health.FailureCount)
+}
+
+// Configuration methods for testing
+func (ps *ProxyServer) setFailureThreshold(upstream string, threshold int) {
+	ps.healthMutex.Lock()
+	defer ps.healthMutex.Unlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		health = &UpstreamHealth{
+			IsHealthy:         true,
+			FailureThreshold:  threshold,
+			RecoveryThreshold: 1,
+		}
+		ps.upstreamHealth[upstream] = health
+	} else {
+		health.FailureThreshold = threshold
+	}
+}
+
+func (ps *ProxyServer) setRecoveryThreshold(upstream string, threshold int) {
+	ps.healthMutex.Lock()
+	defer ps.healthMutex.Unlock()
+
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		health = &UpstreamHealth{
+			IsHealthy:         true,
+			FailureThreshold:  3,
+			RecoveryThreshold: threshold,
+		}
+		ps.upstreamHealth[upstream] = health
+	} else {
+		health.RecoveryThreshold = threshold
+	}
+}
+
+// Stub methods for advanced features (to be implemented later)
+func (ps *ProxyServer) startHealthChecker(interval time.Duration) {
+	// TODO: Implement periodic health checks
+}
+
+func (ps *ProxyServer) stopHealthChecker() {
+	// TODO: Implement health checker stopping
+}
+
+func (ps *ProxyServer) getCircuitBreakerState(upstream string) string {
+	// TODO: Implement circuit breaker states
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
 	
-	return upstream
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists || health.IsHealthy {
+		return "CLOSED"
+	}
+	return "OPEN"
+}
+
+func (ps *ProxyServer) getHealthMetrics() map[string]interface{} {
+	// TODO: Implement comprehensive health metrics export
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
+	
+	metrics := make(map[string]interface{})
+	upstreams := make(map[string]interface{})
+	
+	for url, health := range ps.upstreamHealth {
+		upstreams[url] = map[string]interface{}{
+			"healthy":       health.IsHealthy,
+			"failure_count": health.FailureCount,
+			"success_count": health.SuccessCount,
+		}
+	}
+	
+	metrics["upstreams"] = upstreams
+	return metrics
+}
+
+// Additional stub methods for advanced failover features
+func (ps *ProxyServer) getFailureThreshold(upstream string) int {
+	ps.healthMutex.RLock()
+	defer ps.healthMutex.RUnlock()
+	
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		return 3 // Default threshold
+	}
+	return health.FailureThreshold
+}
+
+func (ps *ProxyServer) adjustFailureThreshold(upstream string, successRate float64) {
+	// TODO: Implement dynamic threshold adjustment based on success rate
+	ps.healthMutex.Lock()
+	defer ps.healthMutex.Unlock()
+	
+	health, exists := ps.upstreamHealth[upstream]
+	if !exists {
+		return
+	}
+	
+	// Simple adjustment logic: lower success rate = stricter threshold
+	if successRate < 0.5 {
+		health.FailureThreshold = 2 // Stricter
+	} else if successRate > 0.8 {
+		health.FailureThreshold = 5 // More tolerant
+	}
+}
+
+func (ps *ProxyServer) enableExponentialBackoff(upstream string, enabled bool) {
+	// TODO: Implement exponential backoff for retry timing
+}
+
+func (ps *ProxyServer) getNextRetryTime(upstream string) time.Time {
+	// TODO: Implement exponential backoff timing
+	return time.Now().Add(1 * time.Second) // Simple 1-second delay for now
 }
 
 func (ps *ProxyServer) authenticate(r *http.Request) bool {
