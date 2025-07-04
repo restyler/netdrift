@@ -32,6 +32,7 @@ func TestWeightedRoundRobin(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9001", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9002", Enabled: true, Weight: 2},
@@ -102,6 +103,7 @@ func TestWeightedRoundRobin(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9004", Enabled: true, Weight: 5},
 			},
@@ -125,6 +127,7 @@ func TestWeightedRoundRobin(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9005", Enabled: true, Weight: 0}, // Zero weight
 				{URL: "http://127.0.0.1:9006", Enabled: true, Weight: 1},
@@ -171,6 +174,7 @@ func TestDisabledUpstreamHandling(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9008", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9009", Enabled: false, Weight: 1}, // Disabled
@@ -206,6 +210,7 @@ func TestDisabledUpstreamHandling(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9011", Enabled: false, Weight: 1},
 				{URL: "http://127.0.0.1:9012", Enabled: false, Weight: 1},
@@ -233,6 +238,7 @@ func TestConcurrentWeightedLoadBalancing(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9013", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9014", Enabled: true, Weight: 3},
@@ -305,6 +311,7 @@ func TestDynamicWeightChanges(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9016", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9017", Enabled: true, Weight: 1},

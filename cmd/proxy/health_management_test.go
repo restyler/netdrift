@@ -24,6 +24,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9020", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9021", Enabled: true, Weight: 1},
@@ -64,6 +65,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9022", Enabled: true, Weight: 1},
 			},
@@ -101,6 +103,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9023", Enabled: true, Weight: 1},
 			},
@@ -139,6 +142,7 @@ func TestUpstreamFailover(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9024", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9025", Enabled: true, Weight: 1},
@@ -180,6 +184,7 @@ func TestUpstreamFailover(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9027", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9028", Enabled: true, Weight: 1},
@@ -216,6 +221,7 @@ func TestUpstreamFailover(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9029", Enabled: true, Weight: 3}, // High weight
 				{URL: "http://127.0.0.1:9030", Enabled: true, Weight: 1}, // Low weight
@@ -269,6 +275,7 @@ func TestHealthCheckInterval(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9032", Enabled: true, Weight: 1},
 		},
@@ -311,6 +318,7 @@ func TestConcurrentHealthManagement(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9033", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9034", Enabled: true, Weight: 1},
@@ -387,6 +395,7 @@ func TestCircuitBreakerBehavior(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9035", Enabled: true, Weight: 1},
 		},
@@ -452,6 +461,7 @@ func TestHealthMetricsExport(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9036", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9037", Enabled: true, Weight: 1},

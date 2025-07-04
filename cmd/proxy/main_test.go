@@ -44,6 +44,7 @@ func TestStatsEndpoint(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{}, // Empty upstream proxies list
 	}
 
@@ -160,6 +161,7 @@ func TestStatsEndpointNoAuth(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9989", Enabled: true, Weight: 1},
 		},
@@ -313,6 +315,7 @@ func TestInvalidEndpoint(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9988", Enabled: true, Weight: 1},
 		},
@@ -383,6 +386,7 @@ func TestStatsEndpointHTTPAuth(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{}, // Empty upstream proxies list
 	}
 

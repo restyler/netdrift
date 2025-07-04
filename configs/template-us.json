@@ -27,5 +27,17 @@
         "note": "Secondary test proxy server"
       }
     ],
-    "upstream_timeout": 5
+    "upstream_timeout": 5,
+    "health_check": {
+      "enabled": true,
+      "interval_seconds": 300,
+      "timeout_seconds": 10,
+      "failure_threshold": 3,
+      "recovery_threshold": 1,
+      "endpoints": [
+        "https://api.ipify.org?format=json",
+        "https://httpbin.org/ip"
+      ],
+      "endpoint_rotation": true
+    }
   } 

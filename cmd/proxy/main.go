@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -37,6 +38,15 @@ type Config struct {
 		Note    string `json:"note,omitempty"`
 	} `json:"upstream_proxies"`
 	UpstreamTimeout int `json:"upstream_timeout,omitempty"`
+	HealthCheck     struct {
+		Enabled          bool     `json:"enabled"`
+		IntervalSeconds  int      `json:"interval_seconds"`
+		TimeoutSeconds   int      `json:"timeout_seconds"`
+		FailureThreshold int      `json:"failure_threshold"`
+		RecoveryThreshold int     `json:"recovery_threshold"`
+		Endpoints        []string `json:"endpoints"`
+		EndpointRotation bool     `json:"endpoint_rotation"`
+	} `json:"health_check,omitempty"`
 }
 
 type UpstreamStats struct {
@@ -91,6 +101,28 @@ type TagGroupStats struct {
 	UnhealthyCount  int     `json:"unhealthy_count"`
 }
 
+type HealthCheckResult struct {
+	Upstream  string
+	Success   bool
+	Latency   time.Duration
+	Error     error
+	Endpoint  string
+	Timestamp time.Time
+}
+
+type HealthChecker struct {
+	proxyServer   *ProxyServer
+	stopChan      chan struct{}
+	running       bool
+	mutex         sync.RWMutex
+	currentEndpointIndex int
+}
+
+type IPResponse struct {
+	IP     string `json:"ip"`
+	Origin string `json:"origin"`
+}
+
 type ProxyServer struct {
 	config            *Config
 	configPath        string
@@ -103,6 +135,7 @@ type ProxyServer struct {
 	reloadMutex       sync.Mutex
 	healthMutex       sync.RWMutex
 	upstreamHealth    map[string]*UpstreamHealth
+	healthChecker     *HealthChecker
 	stats             struct {
 		StartTime       time.Time
 		TotalRequests   int64
@@ -163,6 +196,40 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	if len(ps.upstreams) == 0 {
 		log.Printf("WARNING: No enabled upstream proxies found in configuration")
 	}
+	
+	// Initialize health checker if enabled
+	if config.HealthCheck.Enabled {
+		// Set default values if not specified
+		interval := 5 * time.Minute
+		if config.HealthCheck.IntervalSeconds > 0 {
+			interval = time.Duration(config.HealthCheck.IntervalSeconds) * time.Second
+		}
+		
+		// Set default endpoints if none specified
+		if len(config.HealthCheck.Endpoints) == 0 {
+			config.HealthCheck.Endpoints = []string{
+				"https://api.ipify.org?format=json",
+				"https://httpbin.org/ip",
+			}
+		}
+		
+		// Set default thresholds if not specified
+		if config.HealthCheck.FailureThreshold == 0 {
+			config.HealthCheck.FailureThreshold = 3
+		}
+		if config.HealthCheck.RecoveryThreshold == 0 {
+			config.HealthCheck.RecoveryThreshold = 1
+		}
+		if config.HealthCheck.TimeoutSeconds == 0 {
+			config.HealthCheck.TimeoutSeconds = 10
+		}
+		
+		ps.startHealthChecker(interval)
+		log.Printf("  - Active health checks: enabled (interval: %v, endpoints: %d)", interval, len(config.HealthCheck.Endpoints))
+	} else {
+		log.Printf("  - Active health checks: disabled")
+	}
+	
 	return ps
 }
 
@@ -537,13 +604,251 @@ func (ps *ProxyServer) setRecoveryThreshold(upstream string, threshold int) {
 	}
 }
 
-// Stub methods for advanced features (to be implemented later)
+// Health checker implementation
+func NewHealthChecker(proxyServer *ProxyServer) *HealthChecker {
+	return &HealthChecker{
+		proxyServer: proxyServer,
+		stopChan:    make(chan struct{}),
+		running:     false,
+	}
+}
+
 func (ps *ProxyServer) startHealthChecker(interval time.Duration) {
-	// TODO: Implement periodic health checks
+	if ps.healthChecker != nil {
+		ps.stopHealthChecker()
+	}
+	
+	ps.healthChecker = NewHealthChecker(ps)
+	ps.healthChecker.start(interval)
+	log.Printf("Health checker started with %v interval", interval)
 }
 
 func (ps *ProxyServer) stopHealthChecker() {
-	// TODO: Implement health checker stopping
+	if ps.healthChecker != nil {
+		ps.healthChecker.stop()
+		ps.healthChecker = nil
+		log.Printf("Health checker stopped")
+	}
+}
+
+func (hc *HealthChecker) start(interval time.Duration) {
+	hc.mutex.Lock()
+	defer hc.mutex.Unlock()
+	
+	if hc.running {
+		return
+	}
+	
+	hc.running = true
+	hc.stopChan = make(chan struct{})
+	
+	go hc.run(interval)
+}
+
+func (hc *HealthChecker) stop() {
+	hc.mutex.Lock()
+	defer hc.mutex.Unlock()
+	
+	if !hc.running {
+		return
+	}
+	
+	hc.running = false
+	close(hc.stopChan)
+}
+
+func (hc *HealthChecker) run(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	
+	// Perform initial health check
+	hc.performHealthChecks()
+	
+	for {
+		select {
+		case <-ticker.C:
+			hc.performHealthChecks()
+		case <-hc.stopChan:
+			return
+		}
+	}
+}
+
+func (hc *HealthChecker) performHealthChecks() {
+	ps := hc.proxyServer
+	ps.mutex.RLock()
+	config := ps.config
+	upstreams := make([]string, len(ps.upstreams))
+	copy(upstreams, ps.upstreams)
+	ps.mutex.RUnlock()
+	
+	if !config.HealthCheck.Enabled || len(config.HealthCheck.Endpoints) == 0 {
+		return
+	}
+	
+	// Check each upstream proxy
+	for _, upstream := range upstreams {
+		result := hc.checkUpstreamHealth(upstream, config)
+		hc.processHealthCheckResult(result)
+	}
+}
+
+func (hc *HealthChecker) checkUpstreamHealth(upstream string, config *Config) HealthCheckResult {
+	startTime := time.Now()
+	
+	endpoint := hc.getNextEndpoint(config)
+	if endpoint == "" {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("no health check endpoints configured"),
+			Timestamp: startTime,
+		}
+	}
+	
+	// Create HTTP client with proxy
+	client, err := hc.createProxyClient(upstream, config)
+	if err != nil {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("failed to create proxy client: %v", err),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   time.Since(startTime),
+		}
+	}
+	
+	// Make request through proxy
+	resp, err := client.Get(endpoint)
+	latency := time.Since(startTime)
+	
+	if err != nil {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("health check request failed: %v", err),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   latency,
+		}
+	}
+	defer resp.Body.Close()
+	
+	// Validate response
+	if resp.StatusCode != 200 {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("health check returned status %d", resp.StatusCode),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   latency,
+		}
+	}
+	
+	// Parse JSON response to validate it contains IP information
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("failed to read response body: %v", err),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   latency,
+		}
+	}
+	
+	var ipResp IPResponse
+	if err := json.Unmarshal(body, &ipResp); err != nil {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("failed to parse JSON response: %v", err),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   latency,
+		}
+	}
+	
+	// Validate that we got an IP address
+	ip := ipResp.IP
+	if ip == "" {
+		ip = ipResp.Origin
+	}
+	if ip == "" || net.ParseIP(ip) == nil {
+		return HealthCheckResult{
+			Upstream:  upstream,
+			Success:   false,
+			Error:     fmt.Errorf("invalid or missing IP address in response: %s", string(body)),
+			Endpoint:  endpoint,
+			Timestamp: startTime,
+			Latency:   latency,
+		}
+	}
+	
+	return HealthCheckResult{
+		Upstream:  upstream,
+		Success:   true,
+		Endpoint:  endpoint,
+		Timestamp: startTime,
+		Latency:   latency,
+	}
+}
+
+func (hc *HealthChecker) getNextEndpoint(config *Config) string {
+	if !config.HealthCheck.EndpointRotation || len(config.HealthCheck.Endpoints) <= 1 {
+		if len(config.HealthCheck.Endpoints) > 0 {
+			return config.HealthCheck.Endpoints[0]
+		}
+		return ""
+	}
+	
+	hc.mutex.Lock()
+	defer hc.mutex.Unlock()
+	
+	hc.currentEndpointIndex = (hc.currentEndpointIndex + 1) % len(config.HealthCheck.Endpoints)
+	return config.HealthCheck.Endpoints[hc.currentEndpointIndex]
+}
+
+func (hc *HealthChecker) createProxyClient(proxyURL string, config *Config) (*http.Client, error) {
+	parsedProxy, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL: %v", err)
+	}
+	
+	timeout := 10 * time.Second
+	if config.HealthCheck.TimeoutSeconds > 0 {
+		timeout = time.Duration(config.HealthCheck.TimeoutSeconds) * time.Second
+	}
+	
+	dialer := &net.Dialer{
+		Timeout: timeout,
+	}
+	
+	transport := &http.Transport{
+		Proxy:                 http.ProxyURL(parsedProxy),
+		DialContext:           dialer.DialContext,
+		ResponseHeaderTimeout: timeout,
+	}
+	
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+	}, nil
+}
+
+func (hc *HealthChecker) processHealthCheckResult(result HealthCheckResult) {
+	ps := hc.proxyServer
+	
+	if result.Success {
+		ps.recordUpstreamSuccess(result.Upstream)
+		log.Printf("Health check passed for %s via %s (latency: %v)", result.Upstream, result.Endpoint, result.Latency)
+	} else {
+		ps.recordUpstreamFailure(result.Upstream)
+		log.Printf("Health check failed for %s via %s: %v (latency: %v)", result.Upstream, result.Endpoint, result.Error, result.Latency)
+	}
 }
 
 func (ps *ProxyServer) getCircuitBreakerState(upstream string) string {

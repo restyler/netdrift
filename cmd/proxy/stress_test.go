@@ -23,6 +23,7 @@ func TestHighConcurrencyLoadBalancing(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9040", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9041", Enabled: true, Weight: 2},
@@ -118,6 +119,7 @@ func TestHighConcurrencyLoadBalancing(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 				Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9044", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9045", Enabled: true, Weight: 1},
@@ -197,6 +199,7 @@ func TestMemoryUsageUnderLoad(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9047", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9048", Enabled: true, Weight: 1},
@@ -341,6 +344,7 @@ func TestLongRunningStressTest(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9049", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9050", Enabled: true, Weight: 2},
@@ -471,6 +475,7 @@ func TestRaceConditionDetection(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9052", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9053", Enabled: true, Weight: 1},
@@ -600,6 +605,7 @@ func BenchmarkLoadBalancing(b *testing.B) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9060", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9061", Enabled: true, Weight: 2},
@@ -624,6 +630,7 @@ func BenchmarkHealthTracking(b *testing.B) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9063", Enabled: true, Weight: 1},
 		},

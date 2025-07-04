@@ -24,6 +24,7 @@ func TestUpstreamTagging(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9100", Enabled: true, Weight: 1, Tag: "aws-us-east"},
 				{URL: "http://127.0.0.1:9101", Enabled: true, Weight: 1, Tag: "aws-us-east"},
@@ -96,6 +97,7 @@ func TestUpstreamTagging(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9104", Enabled: true, Weight: 1, Tag: "provider-a"},
 				{URL: "http://127.0.0.1:9105", Enabled: true, Weight: 1, Tag: "provider-a"},
@@ -160,6 +162,7 @@ func TestUpstreamTagging(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9107", Enabled: true, Weight: 1, Tag: "region-east"},
 				{URL: "http://127.0.0.1:9108", Enabled: true, Weight: 1, Tag: "region-west"},
@@ -228,6 +231,7 @@ func TestUpstreamTagging(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9109", Enabled: true, Weight: 3, Tag: "high-performance"},
 				{URL: "http://127.0.0.1:9110", Enabled: true, Weight: 1, Tag: "backup"},
@@ -394,6 +398,7 @@ func TestTaggedLogging(t *testing.T) {
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9112", Enabled: true, Weight: 1, Tag: "test-provider"},
 			},

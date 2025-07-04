@@ -46,6 +46,7 @@ func TestBasicProxyFunctionality(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+			Note    string `json:"note,omitempty"`
 		}{}, // No upstream proxies
 	}
 
@@ -256,6 +257,7 @@ func TestProxyServerCreation(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
+			Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9998", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9997", Enabled: true, Weight: 1},
