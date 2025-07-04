@@ -1047,7 +1047,6 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	}
 
 	var totalLatency int64
-	maxConcurrent := int64(0)
 
 	if isRecentWindow {
 		// For recent windows (15m), use recent requests data
@@ -1125,7 +1124,9 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	if stats.SuccessRequests > 0 {
 		stats.AvgLatency = float64(totalLatency) / float64(stats.SuccessRequests)
 	}
-	stats.MaxConcurrency = maxConcurrent
+	
+	// Set max concurrency from the global max concurrency tracker
+	stats.MaxConcurrency = atomic.LoadInt64(&ps.stats.MaxConcurrency)
 
 	// Finalize upstream stats
 	for i, upstream := range upstreamsCopy {
