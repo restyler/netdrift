@@ -35,25 +35,25 @@ make test               # Basic connectivity test
 #### Production (Proxy Only)
 ```bash
 # Start production proxy
-make docker-prod-up
+docker compose -f docker-compose.prod.yml up -d
 
 # View logs
-make docker-prod-logs
+docker compose -f docker-compose.prod.yml logs -f
 
 # Stop services
-make docker-prod-down
+docker compose -f docker-compose.prod.yml down
 ```
 
 #### Testing (Full Stack with Mock Proxies)
 ```bash
 # Start test environment with mock proxies
-make docker-test-up
+docker compose -f docker-compose.test.yml up -d
 
 # View logs
-make docker-test-logs
+docker compose -f docker-compose.test.yml logs -f
 
 # Stop services
-make docker-test-down
+docker compose -f docker-compose.test.yml down
 ```
 
 ## Configuration
@@ -194,27 +194,24 @@ make test-integration   # Full integration test suite
 
 #### Production Docker
 ```bash
-make docker-prod        # Build production image (proxy only)
-make docker-prod-up     # Start production stack
-make docker-prod-down   # Stop production stack
-make docker-prod-logs   # View production logs
+make docker-prod                                      # Build production image (proxy only)
+docker compose -f docker-compose.prod.yml up -d      # Start production stack
+docker compose -f docker-compose.prod.yml down       # Stop production stack
+docker compose -f docker-compose.prod.yml logs -f    # View production logs
 ```
 
 #### Test Docker  
 ```bash
-make docker-test        # Build test image (with mock proxies)
-make docker-test-up     # Start test stack with mock proxies
-make docker-test-down   # Stop test stack
-make docker-test-logs   # View test logs
+make docker-test                                      # Build test image (with mock proxies)
+docker compose -f docker-compose.test.yml up -d      # Start test stack with mock proxies
+docker compose -f docker-compose.test.yml down       # Stop test stack
+docker compose -f docker-compose.test.yml logs -f    # View test logs
 ```
 
-#### Legacy/Convenience
+#### Single Container
 ```bash
 make docker-build       # Build production image
 make docker-run         # Run single container
-make docker-up          # Alias for docker-prod-up
-make docker-down        # Alias for docker-prod-down
-make docker-logs        # Alias for docker-prod-logs
 make docker-clean       # Clean up all Docker resources
 ```
 
@@ -310,13 +307,13 @@ make docker-build
 make docker-run
 
 # Full production stack
-make docker-prod-up
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 #### Development/Testing
 ```bash
 # Test environment with mock proxies
-make docker-test-up
+docker compose -f docker-compose.test.yml up -d
 ```
 
 ### Environment Variables for Docker
