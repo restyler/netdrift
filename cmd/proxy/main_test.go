@@ -100,11 +100,11 @@ func TestStatsEndpoint(t *testing.T) {
 
 	// Decode stats
 	var stats struct {
-		StartTime       time.Time   `json:"start_time"`
-		Uptime          string      `json:"uptime"`
-		TotalStats      interface{} `json:"total"`
-		RecentStats     interface{} `json:"recent_15m"`
-		CurrentRequests int64       `json:"current_requests"`
+		StartTime          time.Time   `json:"start_time"`
+		Uptime             string      `json:"uptime"`
+		TotalStats         interface{} `json:"total"`
+		RecentStats        interface{} `json:"recent_15m"`
+		CurrentConcurrency int64       `json:"current_concurrency"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
@@ -128,9 +128,9 @@ func TestStatsEndpoint(t *testing.T) {
 		t.Error("Stats should have recent stats")
 	}
 
-	// Current requests should be reasonable (0 or positive)
-	if stats.CurrentRequests < 0 {
-		t.Errorf("Current requests should not be negative, got %d", stats.CurrentRequests)
+	// Current concurrency should be reasonable (0 or positive)
+	if stats.CurrentConcurrency < 0 {
+		t.Errorf("Current concurrency should not be negative, got %d", stats.CurrentConcurrency)
 	}
 }
 

@@ -40,6 +40,7 @@ type Config struct {
 type UpstreamStats struct {
 	URL                string    `json:"url"`
 	Tag                string    `json:"tag,omitempty"`
+	Index              int       `json:"index,omitempty"`
 	TotalRequests      int64     `json:"total_requests"`
 	SuccessRequests    int64     `json:"success_requests"`
 	FailedRequests     int64     `json:"failed_requests"`
@@ -963,7 +964,10 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats {
-	cutoff := time.Now().Add(-window)
+	now := time.Now()
+	cutoff := now.Add(-window)
+	isRecentWindow := window <= 15*time.Minute
+	
 	stats := TimeWindowStats{
 		Window:          window.String(),
 		UpstreamMetrics: make([]UpstreamStats, 0),
@@ -978,23 +982,25 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	weightedUpstreamsCopy := make([]WeightedUpstream, len(ps.weightedUpstreams))
 	copy(weightedUpstreamsCopy, ps.weightedUpstreams)
 
-	// Copy recent requests that are within our window
+	// Copy upstream metrics (for total stats) and recent requests (for windowed stats)
+	upstreamMetricsCopy := make(map[string]UpstreamStats)
+	for url, metric := range ps.stats.UpstreamMetrics {
+		upstreamMetricsCopy[url] = *metric
+	}
+
+	// For recent windows, filter recent requests by timestamp
 	recentRequests := make([]struct {
 		Timestamp time.Time
 		Upstream  string
 		Latency   int64
 		Success   bool
 	}, 0)
-	for _, req := range ps.stats.RecentRequests {
-		if req.Timestamp.After(cutoff) {
-			recentRequests = append(recentRequests, req)
+	if isRecentWindow {
+		for _, req := range ps.stats.RecentRequests {
+			if req.Timestamp.After(cutoff) {
+				recentRequests = append(recentRequests, req)
+			}
 		}
-	}
-
-	// Copy upstream metrics
-	upstreamMetricsCopy := make(map[string]UpstreamStats)
-	for url, metric := range ps.stats.UpstreamMetrics {
-		upstreamMetricsCopy[url] = *metric
 	}
 	ps.mutex.RUnlock()
 
@@ -1006,15 +1012,17 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	}
 	ps.healthMutex.RUnlock()
 
-	// Now process data without holding any locks
-	upstreamStats := make(map[string]*UpstreamStats)
+	// Process data without holding any locks
+	upstreamStatsMap := make(map[string]*UpstreamStats)
 	tagStats := make(map[string]*TagGroupStats)
-	tagLatencyMap := make(map[string]int64) // Pre-calculate tag latencies
+	tagLatencyMap := make(map[string]int64)
 
-	// Initialize per-upstream stats
-	for _, upstream := range upstreamsCopy {
-		upstreamStats[upstream] = &UpstreamStats{
-			URL: upstream,
+	// Initialize per-upstream stats with unique keys (URL + index)
+	for i, upstream := range upstreamsCopy {
+		uniqueKey := fmt.Sprintf("%s#%d", upstream, i)
+		upstreamStatsMap[uniqueKey] = &UpstreamStats{
+			URL:   upstream,
+			Index: i,
 		}
 
 		// Initialize tag group stats
@@ -1031,36 +1039,73 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	var totalLatency int64
 	maxConcurrent := int64(0)
 
-	// Process recent requests (single pass)
-	for _, req := range recentRequests {
-		stats.TotalRequests++
-		if req.Success {
-			stats.SuccessRequests++
-			totalLatency += req.Latency
-		} else {
-			stats.FailedRequests++
-		}
-
-		// Update upstream-specific stats
-		if upstream, exists := upstreamStats[req.Upstream]; exists {
-			upstream.TotalRequests++
+	if isRecentWindow {
+		// For recent windows (15m), use recent requests data
+		for _, req := range recentRequests {
+			stats.TotalRequests++
 			if req.Success {
-				upstream.SuccessRequests++
-				upstream.TotalLatency += req.Latency
+				stats.SuccessRequests++
+				totalLatency += req.Latency
 			} else {
-				upstream.FailedRequests++
+				stats.FailedRequests++
+			}
+
+			// Find matching upstream by URL and update stats
+			for i, upstream := range upstreamsCopy {
+				if upstream == req.Upstream {
+					uniqueKey := fmt.Sprintf("%s#%d", upstream, i)
+					if us, exists := upstreamStatsMap[uniqueKey]; exists {
+						us.TotalRequests++
+						if req.Success {
+							us.SuccessRequests++
+							us.TotalLatency += req.Latency
+						} else {
+							us.FailedRequests++
+						}
+						break // Use first matching upstream for this request
+					}
+				}
+			}
+
+			// Update tag group stats
+			if upstreamMetric, exists := upstreamMetricsCopy[req.Upstream]; exists && upstreamMetric.Tag != "" {
+				if tagGroup, exists := tagStats[upstreamMetric.Tag]; exists {
+					tagGroup.TotalRequests++
+					if req.Success {
+						tagGroup.SuccessRequests++
+						tagLatencyMap[upstreamMetric.Tag] += req.Latency
+					} else {
+						tagGroup.FailedRequests++
+					}
+				}
 			}
 		}
-
-		// Update tag group stats (single pass)
-		if upstreamMetric, exists := upstreamMetricsCopy[req.Upstream]; exists && upstreamMetric.Tag != "" {
-			if tagGroup, exists := tagStats[upstreamMetric.Tag]; exists {
-				tagGroup.TotalRequests++
-				if req.Success {
-					tagGroup.SuccessRequests++
-					tagLatencyMap[upstreamMetric.Tag] += req.Latency
-				} else {
-					tagGroup.FailedRequests++
+	} else {
+		// For total lifetime stats, use upstream metrics directly
+		for i, upstream := range upstreamsCopy {
+			uniqueKey := fmt.Sprintf("%s#%d", upstream, i)
+			if metric, exists := upstreamMetricsCopy[upstream]; exists {
+				if us, exists := upstreamStatsMap[uniqueKey]; exists {
+					us.TotalRequests = metric.TotalRequests
+					us.SuccessRequests = metric.SuccessRequests
+					us.FailedRequests = metric.FailedRequests
+					us.TotalLatency = metric.TotalLatency
+					
+					// Aggregate total stats
+					stats.TotalRequests += metric.TotalRequests
+					stats.SuccessRequests += metric.SuccessRequests
+					stats.FailedRequests += metric.FailedRequests
+					totalLatency += metric.TotalLatency
+					
+					// Update tag group stats
+					if metric.Tag != "" {
+						if tagGroup, exists := tagStats[metric.Tag]; exists {
+							tagGroup.TotalRequests += metric.TotalRequests
+							tagGroup.SuccessRequests += metric.SuccessRequests
+							tagGroup.FailedRequests += metric.FailedRequests
+							tagLatencyMap[metric.Tag] += metric.TotalLatency
+						}
+					}
 				}
 			}
 		}
@@ -1073,16 +1118,19 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	stats.MaxConcurrency = maxConcurrent
 
 	// Finalize upstream stats
-	for _, upstream := range upstreamsCopy {
-		us := upstreamStats[upstream]
-		if us.SuccessRequests > 0 {
-			us.AvgLatency = float64(us.TotalLatency) / float64(us.SuccessRequests)
+	for i, upstream := range upstreamsCopy {
+		uniqueKey := fmt.Sprintf("%s#%d", upstream, i)
+		if us, exists := upstreamStatsMap[uniqueKey]; exists {
+			if us.SuccessRequests > 0 {
+				us.AvgLatency = float64(us.TotalLatency) / float64(us.SuccessRequests)
+			}
+			if metric, exists := upstreamMetricsCopy[upstream]; exists {
+				us.CurrentConnections = metric.CurrentConnections
+				us.Tag = metric.Tag
+				us.LastRequest = metric.LastRequest
+			}
+			stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
 		}
-		if metric, exists := upstreamMetricsCopy[upstream]; exists {
-			us.CurrentConnections = metric.CurrentConnections
-			us.Tag = metric.Tag
-		}
-		stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
 	}
 
 	// Finalize tag group stats
@@ -1131,17 +1179,17 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 
 	// Build response
 	stats := struct {
-		StartTime       time.Time       `json:"start_time"`
-		Uptime          string          `json:"uptime"`
-		TotalStats      TimeWindowStats `json:"total"`
-		RecentStats     TimeWindowStats `json:"recent_15m"`
-		CurrentRequests int64           `json:"current_requests"`
+		StartTime          time.Time       `json:"start_time"`
+		Uptime             string          `json:"uptime"`
+		TotalStats         TimeWindowStats `json:"total"`
+		RecentStats        TimeWindowStats `json:"recent_15m"`
+		CurrentConcurrency int64           `json:"current_concurrency"`
 	}{
-		StartTime:       startTime,
-		Uptime:          uptime.String(),
-		TotalStats:      totalStats,
-		RecentStats:     recentStats,
-		CurrentRequests: atomic.LoadInt64(&ps.stats.CurrentRequests),
+		StartTime:          startTime,
+		Uptime:             uptime.String(),
+		TotalStats:         totalStats,
+		RecentStats:        recentStats,
+		CurrentConcurrency: atomic.LoadInt64(&ps.stats.CurrentRequests),
 	}
 
 	json.NewEncoder(w).Encode(stats)
