@@ -47,7 +47,7 @@ func TestStatsEndpoint(t *testing.T) {
 	}
 
 	// Create proxy server
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 
 	// Start server
 	server := &http.Server{
@@ -148,7 +148,7 @@ func TestStatsEndpointNoAuth(t *testing.T) {
 	}
 
 	// Create proxy server
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 
 	// Start server
 	server := &http.Server{
@@ -222,7 +222,7 @@ func TestInvalidEndpoint(t *testing.T) {
 	}
 
 	// Create proxy server
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 
 	// Start server
 	server := &http.Server{

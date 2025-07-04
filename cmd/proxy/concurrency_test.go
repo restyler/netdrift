@@ -48,7 +48,7 @@ func TestBasicConcurrency(t *testing.T) {
 	}
 
 	// Create and start main proxy
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 	server := &http.Server{
 		Addr:    config.Server.ListenAddress,
 		Handler: ps,
@@ -154,7 +154,7 @@ func TestProxyRoundRobin(t *testing.T) {
 		},
 	}
 
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 
 	// Test round-robin selection
 	seen := make(map[string]int)
@@ -216,7 +216,7 @@ func TestAuthenticationFlow(t *testing.T) {
 		},
 	}
 
-	ps := NewProxyServer(config)
+	ps := NewProxyServer(config, "")
 
 	// Test authentication function directly
 	t.Run("ValidUser1", func(t *testing.T) {

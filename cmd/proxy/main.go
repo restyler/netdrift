@@ -330,8 +330,18 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&upstreamStats.CurrentConnections, 1)
 	defer atomic.AddInt64(&upstreamStats.CurrentConnections, -1)
 
+	// Parse upstream URL for authentication
+	upstreamHost, upstreamAuth, err := parseUpstreamAuth(upstream)
+	if err != nil {
+		log.Printf("Failed to parse upstream URL %s: %v", upstream, err)
+		atomic.AddInt64(&ps.stats.FailedRequests, 1)
+		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
+		http.Error(w, "Invalid upstream proxy configuration", http.StatusBadGateway)
+		return
+	}
+
 	// Connect to upstream proxy
-	upstreamConn, err := net.DialTimeout("tcp", strings.TrimPrefix(upstream, "http://"), 30*time.Second)
+	upstreamConn, err := net.DialTimeout("tcp", upstreamHost, 30*time.Second)
 	if err != nil {
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
@@ -340,8 +350,13 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	defer upstreamConn.Close()
 
-	// Send CONNECT request to upstream
-	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", r.Host, r.Host)
+	// Send CONNECT request to upstream with authentication if present
+	var connectReq string
+	if upstreamAuth != "" {
+		connectReq = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nProxy-Authorization: %s\r\n\r\n", r.Host, r.Host, upstreamAuth)
+	} else {
+		connectReq = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", r.Host, r.Host)
+	}
 	if _, err := upstreamConn.Write([]byte(connectReq)); err != nil {
 		log.Printf("Failed to send CONNECT to upstream: %v", err)
 		http.Error(w, "Failed to connect", http.StatusBadGateway)
@@ -577,6 +592,40 @@ func writePidFile() {
 	
 	fmt.Fprintf(file, "%d\n", os.Getpid())
 	log.Printf("PID file created: %s", pidFile)
+}
+
+// parseUpstreamAuth parses an upstream proxy URL and extracts host and auth header
+func parseUpstreamAuth(upstreamURL string) (host, auth string, err error) {
+	if !strings.HasPrefix(upstreamURL, "http://") && !strings.HasPrefix(upstreamURL, "https://") {
+		return "", "", fmt.Errorf("invalid URL scheme")
+	}
+
+	// Remove http:// or https:// prefix
+	urlPart := strings.TrimPrefix(upstreamURL, "http://")
+	urlPart = strings.TrimPrefix(urlPart, "https://")
+
+	// Check if auth is present
+	if strings.Contains(urlPart, "@") {
+		parts := strings.Split(urlPart, "@")
+		if len(parts) != 2 {
+			return "", "", fmt.Errorf("invalid URL format")
+		}
+		
+		authPart := parts[0]
+		host = parts[1]
+		
+		// URL decode the auth part for common cases
+		if strings.Contains(authPart, "%40") {
+			authPart = strings.ReplaceAll(authPart, "%40", "@")
+		}
+		
+		// Create basic auth header
+		auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(authPart))
+	} else {
+		host = urlPart
+	}
+
+	return host, auth, nil
 }
 
 var (
