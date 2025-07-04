@@ -142,7 +142,12 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	// Build list of enabled upstream proxies with weights
 	ps.buildUpstreamLists()
 
-	log.Printf("Loaded %d upstream proxies (total weight: %d)", len(ps.upstreams), ps.totalWeight)
+	log.Printf("Upstream proxy initialization:")
+	log.Printf("  - Total enabled upstreams: %d", len(ps.upstreams))
+	log.Printf("  - Total weight: %d", ps.totalWeight)
+	log.Printf("  - Load balancing: weighted round-robin")
+	log.Printf("  - Health monitoring: enabled (failure threshold: 3, recovery: auto)")
+	
 	// Log upstream configurations with tags
 	for _, weighted := range ps.weightedUpstreams {
 		tagInfo := ""
@@ -150,6 +155,10 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 			tagInfo = fmt.Sprintf(" [tag: %s]", weighted.Tag)
 		}
 		log.Printf("  - Upstream: %s (weight: %d)%s", weighted.URL, weighted.Weight, tagInfo)
+	}
+	
+	if len(ps.upstreams) == 0 {
+		log.Printf("WARNING: No enabled upstream proxies found in configuration")
 	}
 	return ps
 }
@@ -896,9 +905,6 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats {
-	ps.mutex.Lock()
-	defer ps.mutex.Unlock()
-
 	cutoff := time.Now().Add(-window)
 	stats := TimeWindowStats{
 		Window:          window.String(),
@@ -906,21 +912,60 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 		TagGroups:       make(map[string]TagGroupStats),
 	}
 
-	// Initialize per-upstream stats
+	// Take snapshots of data we need with minimal lock time
+	ps.mutex.RLock()
+	upstreamsCopy := make([]string, len(ps.upstreams))
+	copy(upstreamsCopy, ps.upstreams)
+
+	weightedUpstreamsCopy := make([]WeightedUpstream, len(ps.weightedUpstreams))
+	copy(weightedUpstreamsCopy, ps.weightedUpstreams)
+
+	// Copy recent requests that are within our window
+	recentRequests := make([]struct {
+		Timestamp time.Time
+		Upstream  string
+		Latency   int64
+		Success   bool
+	}, 0)
+	for _, req := range ps.stats.RecentRequests {
+		if req.Timestamp.After(cutoff) {
+			recentRequests = append(recentRequests, req)
+		}
+	}
+
+	// Copy upstream metrics
+	upstreamMetricsCopy := make(map[string]UpstreamStats)
+	for url, metric := range ps.stats.UpstreamMetrics {
+		upstreamMetricsCopy[url] = *metric
+	}
+	ps.mutex.RUnlock()
+
+	// Get health snapshot
+	ps.healthMutex.RLock()
+	upstreamHealthCopy := make(map[string]UpstreamHealth)
+	for url, health := range ps.upstreamHealth {
+		upstreamHealthCopy[url] = *health
+	}
+	ps.healthMutex.RUnlock()
+
+	// Now process data without holding any locks
 	upstreamStats := make(map[string]*UpstreamStats)
 	tagStats := make(map[string]*TagGroupStats)
+	tagLatencyMap := make(map[string]int64) // Pre-calculate tag latencies
 
-	for _, upstream := range ps.upstreams {
+	// Initialize per-upstream stats
+	for _, upstream := range upstreamsCopy {
 		upstreamStats[upstream] = &UpstreamStats{
 			URL: upstream,
 		}
 
 		// Initialize tag group stats
-		if upstreamMetric, exists := ps.stats.UpstreamMetrics[upstream]; exists && upstreamMetric.Tag != "" {
+		if upstreamMetric, exists := upstreamMetricsCopy[upstream]; exists && upstreamMetric.Tag != "" {
 			if _, exists := tagStats[upstreamMetric.Tag]; !exists {
 				tagStats[upstreamMetric.Tag] = &TagGroupStats{
 					Tag: upstreamMetric.Tag,
 				}
+				tagLatencyMap[upstreamMetric.Tag] = 0
 			}
 		}
 	}
@@ -928,12 +973,8 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	var totalLatency int64
 	maxConcurrent := int64(0)
 
-	// Process recent requests
-	for _, req := range ps.stats.RecentRequests {
-		if req.Timestamp.Before(cutoff) {
-			continue
-		}
-
+	// Process recent requests (single pass)
+	for _, req := range recentRequests {
 		stats.TotalRequests++
 		if req.Success {
 			stats.SuccessRequests++
@@ -943,21 +984,23 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 		}
 
 		// Update upstream-specific stats
-		upstream := upstreamStats[req.Upstream]
-		upstream.TotalRequests++
-		if req.Success {
-			upstream.SuccessRequests++
-			upstream.TotalLatency += req.Latency
-		} else {
-			upstream.FailedRequests++
+		if upstream, exists := upstreamStats[req.Upstream]; exists {
+			upstream.TotalRequests++
+			if req.Success {
+				upstream.SuccessRequests++
+				upstream.TotalLatency += req.Latency
+			} else {
+				upstream.FailedRequests++
+			}
 		}
 
-		// Update tag group stats
-		if upstreamMetric, exists := ps.stats.UpstreamMetrics[req.Upstream]; exists && upstreamMetric.Tag != "" {
+		// Update tag group stats (single pass)
+		if upstreamMetric, exists := upstreamMetricsCopy[req.Upstream]; exists && upstreamMetric.Tag != "" {
 			if tagGroup, exists := tagStats[upstreamMetric.Tag]; exists {
 				tagGroup.TotalRequests++
 				if req.Success {
 					tagGroup.SuccessRequests++
+					tagLatencyMap[upstreamMetric.Tag] += req.Latency
 				} else {
 					tagGroup.FailedRequests++
 				}
@@ -965,47 +1008,37 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 		}
 	}
 
-	// Calculate averages and add upstream stats
+	// Calculate averages
 	if stats.SuccessRequests > 0 {
 		stats.AvgLatency = float64(totalLatency) / float64(stats.SuccessRequests)
 	}
 	stats.MaxConcurrency = maxConcurrent
 
-	for _, upstream := range ps.upstreams {
+	// Finalize upstream stats
+	for _, upstream := range upstreamsCopy {
 		us := upstreamStats[upstream]
 		if us.SuccessRequests > 0 {
 			us.AvgLatency = float64(us.TotalLatency) / float64(us.SuccessRequests)
 		}
-		us.CurrentConnections = ps.stats.UpstreamMetrics[upstream].CurrentConnections
-		// Copy tag from upstream metrics
-		if upstreamMetric, exists := ps.stats.UpstreamMetrics[upstream]; exists {
-			us.Tag = upstreamMetric.Tag
+		if metric, exists := upstreamMetricsCopy[upstream]; exists {
+			us.CurrentConnections = metric.CurrentConnections
+			us.Tag = metric.Tag
 		}
 		stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
 	}
 
 	// Finalize tag group stats
-	ps.healthMutex.RLock()
 	for tag, tagGroup := range tagStats {
 		// Calculate averages for tag groups
 		if tagGroup.SuccessRequests > 0 {
-			var totalTagLatency int64
-			for _, req := range ps.stats.RecentRequests {
-				if req.Timestamp.Before(cutoff) || !req.Success {
-					continue
-				}
-				if upstreamMetric, exists := ps.stats.UpstreamMetrics[req.Upstream]; exists && upstreamMetric.Tag == tag {
-					totalTagLatency += req.Latency
-				}
-			}
-			tagGroup.AvgLatency = float64(totalTagLatency) / float64(tagGroup.SuccessRequests)
+			tagGroup.AvgLatency = float64(tagLatencyMap[tag]) / float64(tagGroup.SuccessRequests)
 		}
 
 		// Count healthy/unhealthy upstreams for this tag
-		for _, weighted := range ps.weightedUpstreams {
+		for _, weighted := range weightedUpstreamsCopy {
 			if weighted.Tag == tag {
 				tagGroup.UpstreamCount++
-				if health, exists := ps.upstreamHealth[weighted.URL]; exists {
+				if health, exists := upstreamHealthCopy[weighted.URL]; exists {
 					if health.IsHealthy {
 						tagGroup.HealthyCount++
 					} else {
@@ -1019,7 +1052,6 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 
 		stats.TagGroups[tag] = *tagGroup
 	}
-	ps.healthMutex.RUnlock()
 
 	return stats
 }
@@ -1027,7 +1059,19 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
+	// Get basic stats without holding mutex
 	ps.mutex.RLock()
+	startTime := ps.stats.StartTime
+	ps.mutex.RUnlock()
+
+	// Calculate uptime
+	uptime := time.Since(startTime)
+
+	// Get time window stats (these handle their own locking)
+	totalStats := ps.getTimeWindowStats(uptime)
+	recentStats := ps.getTimeWindowStats(15 * time.Minute)
+
+	// Build response
 	stats := struct {
 		StartTime       time.Time       `json:"start_time"`
 		Uptime          string          `json:"uptime"`
@@ -1035,13 +1079,12 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		RecentStats     TimeWindowStats `json:"recent_15m"`
 		CurrentRequests int64           `json:"current_requests"`
 	}{
-		StartTime:       ps.stats.StartTime,
-		Uptime:          time.Since(ps.stats.StartTime).String(),
-		TotalStats:      ps.getTimeWindowStats(time.Since(ps.stats.StartTime)),
-		RecentStats:     ps.getTimeWindowStats(15 * time.Minute),
+		StartTime:       startTime,
+		Uptime:          uptime.String(),
+		TotalStats:      totalStats,
+		RecentStats:     recentStats,
 		CurrentRequests: atomic.LoadInt64(&ps.stats.CurrentRequests),
 	}
-	ps.mutex.RUnlock()
 
 	json.NewEncoder(w).Encode(stats)
 }
@@ -1164,6 +1207,24 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	log.Printf("Configuration loaded successfully:")
+	log.Printf("  - Server: %s", config.Server.Name)
+	log.Printf("  - Listen Address: %s", config.Server.ListenAddress)
+	log.Printf("  - Stats Endpoint: %s", config.Server.StatsEndpoint)
+	log.Printf("  - Authentication: %t", config.Authentication.Enabled)
+	if config.Authentication.Enabled {
+		log.Printf("  - Configured Users: %d", len(config.Authentication.Users))
+	}
+	log.Printf("  - Total Upstream Proxies: %d", len(config.UpstreamProxies))
+	
+	enabledCount := 0
+	for _, upstream := range config.UpstreamProxies {
+		if upstream.Enabled {
+			enabledCount++
+		}
+	}
+	log.Printf("  - Enabled Upstream Proxies: %d", enabledCount)
+
 	log.Printf("Starting %s on %s", config.Server.Name, config.Server.ListenAddress)
 
 	proxyServer := NewProxyServer(config, configPath)
@@ -1176,11 +1237,13 @@ func main() {
 		Handler: proxyServer,
 	}
 
-	log.Printf("Proxy server listening on %s", config.Server.ListenAddress)
-	if config.Authentication.Enabled {
-		log.Printf("Authentication is enabled")
-	}
-	log.Printf("Stats endpoint available at %s", config.Server.StatsEndpoint)
+	log.Printf("Proxy server successfully started:")
+	log.Printf("  - Listening on: %s", config.Server.ListenAddress)
+	log.Printf("  - Stats endpoint: %s", config.Server.StatsEndpoint)
+	log.Printf("  - Authentication: %s", func() string { if config.Authentication.Enabled { return "enabled" } else { return "disabled" } }())
+	log.Printf("  - Config file watcher: active (checks every 1 minute)")
+	log.Printf("  - Health monitoring: active")
+	log.Printf("Server ready to accept connections")
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)

@@ -162,19 +162,25 @@ start_main_proxy() {
 run_tests() {
     log "Running tests..."
     
-    # Test 1: Basic connectivity test (with auth if enabled)
-    log "Test 1: Basic connectivity"
+    # Extract authentication configuration once
+    local auth_enabled="false"
+    local username=""
+    local password=""
     local auth_url="http://127.0.0.1:$MAIN_PROXY_PORT"
     
     if grep -q '"enabled": true' "$PROXY_CONFIG"; then
+        auth_enabled="true"
         # Get credentials from config
-        local username=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"username"' | head -1 | sed 's/.*"username": *"\([^"]*\)".*/\1/')
-        local password=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"password"' | head -1 | sed 's/.*"password": *"\([^"]*\)".*/\1/')
+        username=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"username"' | head -1 | sed 's/.*"username": *"\([^"]*\)".*/\1/')
+        password=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"password"' | head -1 | sed 's/.*"password": *"\([^"]*\)".*/\1/')
         
         if [ -n "$username" ] && [ -n "$password" ]; then
             auth_url="http://${username}:${password}@127.0.0.1:$MAIN_PROXY_PORT"
         fi
     fi
+    
+    # Test 1: Basic connectivity test (with auth if enabled)
+    log "Test 1: Basic connectivity"
     
     if curl -x "$auth_url" --connect-timeout 10 -s -o /dev/null -w "%{http_code}" https://httpbin.org/ip | grep -q "200"; then
         success "Basic connectivity test passed"
@@ -185,13 +191,9 @@ run_tests() {
     
     # Test 2: Test with authentication (if enabled)
     log "Test 2: Authentication test"
-    if grep -q '"enabled": true' "$PROXY_CONFIG"; then
-        # Get credentials from config
-        local username=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"username"' | head -1 | sed 's/.*"username": *"\([^"]*\)".*/\1/')
-        local password=$(grep -A 10 '"authentication"' "$PROXY_CONFIG" | grep '"password"' | head -1 | sed 's/.*"password": *"\([^"]*\)".*/\1/')
-        
+    if [ "$auth_enabled" = "true" ]; then
         if [ -n "$username" ] && [ -n "$password" ]; then
-            if curl -x http://${username}:${password}@127.0.0.1:$MAIN_PROXY_PORT --connect-timeout 10 -s -o /dev/null -w "%{http_code}" https://httpbin.org/ip | grep -q "200"; then
+            if curl -x "http://${username}:${password}@127.0.0.1:$MAIN_PROXY_PORT" --connect-timeout 10 -s -o /dev/null -w "%{http_code}" https://httpbin.org/ip | grep -q "200"; then
                 success "Authentication test passed"
             else
                 error "Authentication test failed"
@@ -206,10 +208,21 @@ run_tests() {
     
     # Test 3: Stats endpoint
     log "Test 3: Stats endpoint"
-    if curl -s http://127.0.0.1:$MAIN_PROXY_PORT/stats | grep -q "total_requests"; then
+    local stats_response
+    if [ "$auth_enabled" = "true" ] && [ -n "$username" ] && [ -n "$password" ]; then
+        # Use authentication for stats endpoint
+        local auth_header="Proxy-Authorization: Basic $(echo -n "$username:$password" | base64)"
+        stats_response=$(curl -s -H "$auth_header" "http://127.0.0.1:$MAIN_PROXY_PORT/stats" 2>/dev/null)
+    else
+        # No authentication required
+        stats_response=$(curl -s "http://127.0.0.1:$MAIN_PROXY_PORT/stats" 2>/dev/null)
+    fi
+    
+    if echo "$stats_response" | grep -q "total_requests"; then
         success "Stats endpoint test passed"
     else
         error "Stats endpoint test failed"
+        log "Stats response was: $stats_response"
         return 1
     fi
     
