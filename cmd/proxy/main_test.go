@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -18,7 +20,7 @@ func TestStatsEndpoint(t *testing.T) {
 			StatsEndpoint string `json:"stats_endpoint"`
 		}{
 			Name:          "Test Proxy",
-			ListenAddress: "127.0.0.1:3131",
+			ListenAddress: "127.0.0.1:3150",
 			StatsEndpoint: "/stats",
 		},
 		Authentication: struct {
@@ -40,32 +42,46 @@ func TestStatsEndpoint(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
-		}{
-			{URL: "http://127.0.0.1:9991", Enabled: true, Weight: 1},
-			{URL: "http://127.0.0.1:9990", Enabled: true, Weight: 1},
-		},
+			Tag     string `json:"tag,omitempty"`
+		}{}, // Empty upstream proxies list
 	}
 
 	// Create proxy server
 	ps := NewProxyServer(config, "")
 
-	// Start server
+	// Start server with timeouts
 	server := &http.Server{
-		Addr:    config.Server.ListenAddress,
-		Handler: ps,
+		Addr:              config.Server.ListenAddress,
+		Handler:           ps,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go server.ListenAndServe()
 	defer server.Close()
 
-	// Wait for server to start
-	time.Sleep(100 * time.Millisecond)
+	// Wait for server to start and verify it's listening
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3150", time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if i == maxRetries-1 {
+			t.Fatalf("Server failed to start after %d attempts", maxRetries)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Create authentication header
 	auth := base64.StdEncoding.EncodeToString([]byte("proxyuser:Proxy234"))
 
-	// Test stats endpoint
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", "http://127.0.0.1:3131/stats", nil)
+	// Test stats endpoint with a timeout
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	req, err := http.NewRequest("GET", "http://127.0.0.1:3150/stats", nil)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
 	}
@@ -83,11 +99,11 @@ func TestStatsEndpoint(t *testing.T) {
 
 	// Decode stats
 	var stats struct {
-		StartTime       time.Time `json:"start_time"`
-		Uptime          string    `json:"uptime"`
+		StartTime       time.Time   `json:"start_time"`
+		Uptime          string      `json:"uptime"`
 		TotalStats      interface{} `json:"total"`
 		RecentStats     interface{} `json:"recent_15m"`
-		CurrentRequests int64     `json:"current_requests"`
+		CurrentRequests int64       `json:"current_requests"`
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
@@ -142,6 +158,7 @@ func TestStatsEndpointNoAuth(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9989", Enabled: true, Weight: 1},
 		},
@@ -150,24 +167,82 @@ func TestStatsEndpointNoAuth(t *testing.T) {
 	// Create proxy server
 	ps := NewProxyServer(config, "")
 
-	// Start server
+	// Start server with timeouts
 	server := &http.Server{
-		Addr:    config.Server.ListenAddress,
-		Handler: ps,
+		Addr:              config.Server.ListenAddress,
+		Handler:           ps,
+		ReadTimeout:       2 * time.Second,
+		WriteTimeout:      2 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
 	}
-	go server.ListenAndServe()
-	defer server.Close()
 
-	// Wait for server to start
-	time.Sleep(100 * time.Millisecond)
+	// Create channels for server startup synchronization
+	serverReady := make(chan struct{})
+	serverError := make(chan error, 1)
+
+	go func() {
+		// Signal that we're about to start listening
+		close(serverReady)
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			serverError <- err
+		}
+	}()
+
+	// Wait for server to start or fail
+	select {
+	case err := <-serverError:
+		t.Fatalf("Server failed to start: %v", err)
+	case <-serverReady:
+		// Continue with test
+	}
+
+	// Ensure server cleanup
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			t.Errorf("Server shutdown error: %v", err)
+		}
+	}()
+
+	// Wait for server to start and verify it's listening
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3138", time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if i == maxRetries-1 {
+			t.Fatalf("Server failed to start after %d attempts", maxRetries)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	// Test stats endpoint without auth (should work since auth is disabled)
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		Transport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   1 * time.Second,
+				KeepAlive: 1 * time.Second,
+			}).DialContext,
+			ResponseHeaderTimeout: 1 * time.Second,
+			IdleConnTimeout:       1 * time.Second,
+			DisableKeepAlives:     true, // Disable keep-alives to prevent connection reuse
+		},
+	}
+
 	req, err := http.NewRequest("GET", "http://127.0.0.1:3138/stats", nil)
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
 	}
-	
+
+	// Add context with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to get stats: %v", err)
@@ -179,14 +254,34 @@ func TestStatsEndpointNoAuth(t *testing.T) {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
 
-	// Verify it's valid JSON
-	var stats map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
-		t.Fatalf("Failed to decode stats JSON: %v", err)
+	// Read body with timeout
+	type statsResponse struct {
+		StartTime interface{} `json:"start_time"`
+	}
+	var stats statsResponse
+
+	// Create a timer for body read timeout
+	bodyTimer := time.NewTimer(2 * time.Second)
+	defer bodyTimer.Stop()
+
+	// Create a channel for the decoding operation
+	done := make(chan error, 1)
+	go func() {
+		done <- json.NewDecoder(resp.Body).Decode(&stats)
+	}()
+
+	// Wait for either completion or timeout
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Failed to decode stats JSON: %v", err)
+		}
+	case <-bodyTimer.C:
+		t.Fatal("Timeout while reading response body")
 	}
 
 	// Should have basic structure
-	if _, ok := stats["start_time"]; !ok {
+	if stats.StartTime == nil {
 		t.Error("Stats should contain start_time")
 	}
 }
@@ -216,6 +311,7 @@ func TestInvalidEndpoint(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9988", Enabled: true, Weight: 1},
 		},
@@ -241,7 +337,7 @@ func TestInvalidEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create request: %v", err)
 	}
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)

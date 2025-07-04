@@ -33,11 +33,13 @@ type Config struct {
 		URL     string `json:"url"`
 		Enabled bool   `json:"enabled"`
 		Weight  int    `json:"weight"`
+		Tag     string `json:"tag,omitempty"`
 	} `json:"upstream_proxies"`
 }
 
 type UpstreamStats struct {
 	URL                string    `json:"url"`
+	Tag                string    `json:"tag,omitempty"`
 	TotalRequests      int64     `json:"total_requests"`
 	SuccessRequests    int64     `json:"success_requests"`
 	FailedRequests     int64     `json:"failed_requests"`
@@ -48,6 +50,7 @@ type UpstreamStats struct {
 }
 
 type UpstreamHealth struct {
+	Tag               string    `json:"tag,omitempty"`
 	FailureCount      int64     `json:"failure_count"`
 	SuccessCount      int64     `json:"success_count"`
 	LastFailure       time.Time `json:"last_failure"`
@@ -60,31 +63,44 @@ type UpstreamHealth struct {
 type WeightedUpstream struct {
 	URL    string
 	Weight int
+	Tag    string
 }
 
 type TimeWindowStats struct {
-	Window          string          `json:"window"`
-	TotalRequests   int64           `json:"total_requests"`
-	SuccessRequests int64           `json:"success_requests"`
-	FailedRequests  int64           `json:"failed_requests"`
-	AvgLatency      float64         `json:"avg_latency_ms"`
-	MaxConcurrency  int64           `json:"max_concurrency"`
-	UpstreamMetrics []UpstreamStats `json:"upstream_metrics"`
+	Window          string                   `json:"window"`
+	TotalRequests   int64                    `json:"total_requests"`
+	SuccessRequests int64                    `json:"success_requests"`
+	FailedRequests  int64                    `json:"failed_requests"`
+	AvgLatency      float64                  `json:"avg_latency_ms"`
+	MaxConcurrency  int64                    `json:"max_concurrency"`
+	UpstreamMetrics []UpstreamStats          `json:"upstream_metrics"`
+	TagGroups       map[string]TagGroupStats `json:"tag_groups,omitempty"`
+}
+
+type TagGroupStats struct {
+	Tag             string  `json:"tag"`
+	TotalRequests   int64   `json:"total_requests"`
+	SuccessRequests int64   `json:"success_requests"`
+	FailedRequests  int64   `json:"failed_requests"`
+	AvgLatency      float64 `json:"avg_latency_ms"`
+	UpstreamCount   int     `json:"upstream_count"`
+	HealthyCount    int     `json:"healthy_count"`
+	UnhealthyCount  int     `json:"unhealthy_count"`
 }
 
 type ProxyServer struct {
-	config           *Config
-	configPath       string
-	configModTime    time.Time
-	upstreams        []string
+	config            *Config
+	configPath        string
+	configModTime     time.Time
+	upstreams         []string
 	weightedUpstreams []WeightedUpstream
-	totalWeight      int
-	currentIdx       int
-	mutex            sync.RWMutex
-	reloadMutex      sync.Mutex
-	healthMutex      sync.RWMutex
-	upstreamHealth   map[string]*UpstreamHealth
-	stats            struct {
+	totalWeight       int
+	currentIdx        int
+	mutex             sync.RWMutex
+	reloadMutex       sync.Mutex
+	healthMutex       sync.RWMutex
+	upstreamHealth    map[string]*UpstreamHealth
+	stats             struct {
 		StartTime       time.Time
 		TotalRequests   int64
 		SuccessRequests int64
@@ -107,7 +123,7 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 		configPath:     configPath,
 		upstreamHealth: make(map[string]*UpstreamHealth),
 	}
-	
+
 	// Get initial config file modification time
 	if stat, err := os.Stat(configPath); err == nil {
 		ps.configModTime = stat.ModTime()
@@ -127,52 +143,60 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	ps.buildUpstreamLists()
 
 	log.Printf("Loaded %d upstream proxies (total weight: %d)", len(ps.upstreams), ps.totalWeight)
+	// Log upstream configurations with tags
+	for _, weighted := range ps.weightedUpstreams {
+		tagInfo := ""
+		if weighted.Tag != "" {
+			tagInfo = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+		}
+		log.Printf("  - Upstream: %s (weight: %d)%s", weighted.URL, weighted.Weight, tagInfo)
+	}
 	return ps
 }
 
 func (ps *ProxyServer) reloadConfig() error {
 	ps.reloadMutex.Lock()
 	defer ps.reloadMutex.Unlock()
-	
+
 	// Check if config file has been modified
 	stat, err := os.Stat(ps.configPath)
 	if err != nil {
 		return fmt.Errorf("failed to stat config file: %v", err)
 	}
-	
+
 	if !stat.ModTime().After(ps.configModTime) {
 		// File hasn't been modified
 		return nil
 	}
-	
+
 	log.Printf("Config file modified, reloading configuration from %s", ps.configPath)
-	
+
 	// Load new configuration
 	newConfig, err := loadConfig(ps.configPath)
 	if err != nil {
 		log.Printf("Failed to reload config: %v", err)
 		return fmt.Errorf("failed to reload config: %v", err)
 	}
-	
+
 	// Update configuration with write lock
 	ps.mutex.Lock()
 	defer ps.mutex.Unlock()
-	
+
 	ps.config = newConfig
 	ps.configModTime = stat.ModTime()
-	
+
 	// Rebuild upstream list
 	oldUpstreams := ps.upstreams
 	ps.currentIdx = 0
-	
+
 	// Use the new build method
 	ps.buildUpstreamLists()
-	
+
 	log.Printf("Configuration reloaded successfully:")
 	log.Printf("  - Server: %s", newConfig.Server.Name)
 	log.Printf("  - Authentication: %t", newConfig.Authentication.Enabled)
 	log.Printf("  - Upstream proxies: %d enabled (was %d)", len(ps.upstreams), len(oldUpstreams))
-	
+
 	// Log upstream changes
 	for _, upstream := range ps.upstreams {
 		found := false
@@ -183,10 +207,17 @@ func (ps *ProxyServer) reloadConfig() error {
 			}
 		}
 		if !found {
-			log.Printf("  + Added upstream: %s", upstream)
+			tagInfo := ""
+			for _, weighted := range ps.weightedUpstreams {
+				if weighted.URL == upstream && weighted.Tag != "" {
+					tagInfo = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+					break
+				}
+			}
+			log.Printf("  + Added upstream: %s%s", upstream, tagInfo)
 		}
 	}
-	
+
 	for _, oldUpstream := range oldUpstreams {
 		found := false
 		for _, upstream := range ps.upstreams {
@@ -196,10 +227,17 @@ func (ps *ProxyServer) reloadConfig() error {
 			}
 		}
 		if !found {
-			log.Printf("  - Removed upstream: %s", oldUpstream)
+			tagInfo := ""
+			for _, weighted := range ps.weightedUpstreams {
+				if weighted.URL == oldUpstream && weighted.Tag != "" {
+					tagInfo = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+					break
+				}
+			}
+			log.Printf("  - Removed upstream: %s%s", oldUpstream, tagInfo)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -234,24 +272,33 @@ func (ps *ProxyServer) buildUpstreamLists() {
 			ps.weightedUpstreams = append(ps.weightedUpstreams, WeightedUpstream{
 				URL:    upstream.URL,
 				Weight: weight,
+				Tag:    upstream.Tag,
 			})
 			ps.totalWeight += weight
 
 			// Initialize upstream health if not exists
 			if _, exists := ps.upstreamHealth[upstream.URL]; !exists {
 				ps.upstreamHealth[upstream.URL] = &UpstreamHealth{
+					Tag:               upstream.Tag,
 					IsHealthy:         true,
 					FailureThreshold:  3, // Default failure threshold
 					RecoveryThreshold: 1, // Default recovery threshold
 				}
+			} else {
+				// Update tag if it changed
+				ps.upstreamHealth[upstream.URL].Tag = upstream.Tag
 			}
 
 			// Initialize stats if not exists
 			if _, exists := ps.stats.UpstreamMetrics[upstream.URL]; !exists {
 				ps.stats.UpstreamMetrics[upstream.URL] = &UpstreamStats{
 					URL:         upstream.URL,
+					Tag:         upstream.Tag,
 					LastRequest: time.Now(),
 				}
+			} else {
+				// Update tag if it changed
+				ps.stats.UpstreamMetrics[upstream.URL].Tag = upstream.Tag
 			}
 		}
 	}
@@ -379,6 +426,12 @@ func (ps *ProxyServer) recordUpstreamFailure(upstream string) {
 	// Check if upstream should be marked unhealthy
 	if health.FailureCount >= int64(health.FailureThreshold) {
 		health.IsHealthy = false
+		// Log unhealthy status with tag information
+		tagInfo := ""
+		if health.Tag != "" {
+			tagInfo = fmt.Sprintf(" [tag: %s]", health.Tag)
+		}
+		log.Printf("Upstream %s%s marked as unhealthy after %d failures", upstream, tagInfo, health.FailureCount)
 	}
 }
 
@@ -390,8 +443,8 @@ func (ps *ProxyServer) recordUpstreamSuccess(upstream string) {
 	if !exists {
 		health = &UpstreamHealth{
 			IsHealthy:         true,
-			FailureThreshold:  3,
-			RecoveryThreshold: 1,
+			FailureThreshold:  30,
+			RecoveryThreshold: 3,
 		}
 		ps.upstreamHealth[upstream] = health
 	}
@@ -404,6 +457,12 @@ func (ps *ProxyServer) recordUpstreamSuccess(upstream string) {
 		// Reset failure count on success to allow recovery
 		health.FailureCount = 0
 		health.IsHealthy = true
+		// Log recovery with tag information
+		tagInfo := ""
+		if health.Tag != "" {
+			tagInfo = fmt.Sprintf(" [tag: %s]", health.Tag)
+		}
+		log.Printf("Upstream %s%s recovered and marked as healthy", upstream, tagInfo)
 	}
 }
 
@@ -479,7 +538,7 @@ func (ps *ProxyServer) getCircuitBreakerState(upstream string) string {
 	// TODO: Implement circuit breaker states
 	ps.healthMutex.RLock()
 	defer ps.healthMutex.RUnlock()
-	
+
 	health, exists := ps.upstreamHealth[upstream]
 	if !exists || health.IsHealthy {
 		return "CLOSED"
@@ -488,22 +547,60 @@ func (ps *ProxyServer) getCircuitBreakerState(upstream string) string {
 }
 
 func (ps *ProxyServer) getHealthMetrics() map[string]interface{} {
-	// TODO: Implement comprehensive health metrics export
 	ps.healthMutex.RLock()
 	defer ps.healthMutex.RUnlock()
-	
+
 	metrics := make(map[string]interface{})
 	upstreams := make(map[string]interface{})
-	
+	tagGroups := make(map[string]interface{})
+
+	// Per-upstream health metrics
 	for url, health := range ps.upstreamHealth {
 		upstreams[url] = map[string]interface{}{
 			"healthy":       health.IsHealthy,
 			"failure_count": health.FailureCount,
 			"success_count": health.SuccessCount,
+			"tag":           health.Tag,
 		}
 	}
-	
+
+	// Group health metrics by tag
+	tagHealthStats := make(map[string]map[string]interface{})
+	for _, health := range ps.upstreamHealth {
+		if health.Tag != "" {
+			if _, exists := tagHealthStats[health.Tag]; !exists {
+				tagHealthStats[health.Tag] = map[string]interface{}{
+					"tag":                 health.Tag,
+					"total_upstreams":     0,
+					"healthy_upstreams":   0,
+					"unhealthy_upstreams": 0,
+					"total_failures":      int64(0),
+					"total_successes":     int64(0),
+				}
+			}
+
+			tagStats := tagHealthStats[health.Tag]
+			tagStats["total_upstreams"] = tagStats["total_upstreams"].(int) + 1
+			tagStats["total_failures"] = tagStats["total_failures"].(int64) + health.FailureCount
+			tagStats["total_successes"] = tagStats["total_successes"].(int64) + health.SuccessCount
+
+			if health.IsHealthy {
+				tagStats["healthy_upstreams"] = tagStats["healthy_upstreams"].(int) + 1
+			} else {
+				tagStats["unhealthy_upstreams"] = tagStats["unhealthy_upstreams"].(int) + 1
+			}
+		}
+	}
+
+	// Convert to final format
+	for tag, stats := range tagHealthStats {
+		tagGroups[tag] = stats
+	}
+
 	metrics["upstreams"] = upstreams
+	if len(tagGroups) > 0 {
+		metrics["tag_groups"] = tagGroups
+	}
 	return metrics
 }
 
@@ -511,7 +608,7 @@ func (ps *ProxyServer) getHealthMetrics() map[string]interface{} {
 func (ps *ProxyServer) getFailureThreshold(upstream string) int {
 	ps.healthMutex.RLock()
 	defer ps.healthMutex.RUnlock()
-	
+
 	health, exists := ps.upstreamHealth[upstream]
 	if !exists {
 		return 3 // Default threshold
@@ -523,12 +620,12 @@ func (ps *ProxyServer) adjustFailureThreshold(upstream string, successRate float
 	// TODO: Implement dynamic threshold adjustment based on success rate
 	ps.healthMutex.Lock()
 	defer ps.healthMutex.Unlock()
-	
+
 	health, exists := ps.upstreamHealth[upstream]
 	if !exists {
 		return
 	}
-	
+
 	// Simple adjustment logic: lower success rate = stricter threshold
 	if successRate < 0.5 {
 		health.FailureThreshold = 2 // Stricter
@@ -550,7 +647,7 @@ func (ps *ProxyServer) authenticate(r *http.Request) bool {
 	ps.mutex.RLock()
 	config := ps.config
 	ps.mutex.RUnlock()
-	
+
 	if !config.Authentication.Enabled {
 		log.Printf("Authentication disabled, allowing request")
 		return true
@@ -637,7 +734,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// Parse upstream URL for authentication
 	upstreamHost, upstreamAuth, err := parseUpstreamAuth(upstream)
 	if err != nil {
-		log.Printf("Failed to parse upstream URL %s: %v", upstream, err)
+		upstreamTag := ""
+		for _, weighted := range ps.weightedUpstreams {
+			if weighted.URL == upstream && weighted.Tag != "" {
+				upstreamTag = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+				break
+			}
+		}
+		log.Printf("Failed to parse upstream URL %s%s: %v", upstream, upstreamTag, err)
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
 		http.Error(w, "Invalid upstream proxy configuration", http.StatusBadGateway)
@@ -645,7 +749,7 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Connect to upstream proxy
-	upstreamConn, err := net.DialTimeout("tcp", upstreamHost, 30*time.Second)
+	upstreamConn, err := net.DialTimeout("tcp", upstreamHost, 5*time.Second)
 	if err != nil {
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
@@ -662,7 +766,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		connectReq = fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", r.Host, r.Host)
 	}
 	if _, err := upstreamConn.Write([]byte(connectReq)); err != nil {
-		log.Printf("Failed to send CONNECT to upstream: %v", err)
+		upstreamTag := ""
+		for _, weighted := range ps.weightedUpstreams {
+			if weighted.URL == upstream && weighted.Tag != "" {
+				upstreamTag = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+				break
+			}
+		}
+		log.Printf("Failed to send CONNECT to upstream %s%s: %v", upstream, upstreamTag, err)
 		http.Error(w, "Failed to connect", http.StatusBadGateway)
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
@@ -673,7 +784,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	response := make([]byte, 1024)
 	n, err := upstreamConn.Read(response)
 	if err != nil {
-		log.Printf("Failed to read response from upstream: %v", err)
+		upstreamTag := ""
+		for _, weighted := range ps.weightedUpstreams {
+			if weighted.URL == upstream && weighted.Tag != "" {
+				upstreamTag = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+				break
+			}
+		}
+		log.Printf("Failed to read response from upstream %s%s: %v", upstream, upstreamTag, err)
 		http.Error(w, "Failed to connect", http.StatusBadGateway)
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
@@ -682,7 +800,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	responseStr := string(response[:n])
 	if !strings.Contains(responseStr, "200") {
-		log.Printf("Upstream proxy rejected connection: %s", strings.TrimSpace(responseStr))
+		upstreamTag := ""
+		for _, weighted := range ps.weightedUpstreams {
+			if weighted.URL == upstream && weighted.Tag != "" {
+				upstreamTag = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+				break
+			}
+		}
+		log.Printf("Upstream proxy %s%s rejected connection: %s", upstream, upstreamTag, strings.TrimSpace(responseStr))
 		http.Error(w, "Upstream proxy rejected connection", http.StatusBadGateway)
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
@@ -717,7 +842,14 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Established tunnel between client and %s via %s", r.Host, upstream)
+	upstreamTag := ""
+	for _, weighted := range ps.weightedUpstreams {
+		if weighted.URL == upstream && weighted.Tag != "" {
+			upstreamTag = fmt.Sprintf(" [tag: %s]", weighted.Tag)
+			break
+		}
+	}
+	log.Printf("Established tunnel between client and %s via %s%s", r.Host, upstream, upstreamTag)
 	atomic.AddInt64(&ps.stats.SuccessRequests, 1)
 	atomic.AddInt64(&upstreamStats.SuccessRequests, 1)
 
@@ -771,13 +903,25 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	stats := TimeWindowStats{
 		Window:          window.String(),
 		UpstreamMetrics: make([]UpstreamStats, 0),
+		TagGroups:       make(map[string]TagGroupStats),
 	}
 
 	// Initialize per-upstream stats
 	upstreamStats := make(map[string]*UpstreamStats)
+	tagStats := make(map[string]*TagGroupStats)
+
 	for _, upstream := range ps.upstreams {
 		upstreamStats[upstream] = &UpstreamStats{
 			URL: upstream,
+		}
+
+		// Initialize tag group stats
+		if upstreamMetric, exists := ps.stats.UpstreamMetrics[upstream]; exists && upstreamMetric.Tag != "" {
+			if _, exists := tagStats[upstreamMetric.Tag]; !exists {
+				tagStats[upstreamMetric.Tag] = &TagGroupStats{
+					Tag: upstreamMetric.Tag,
+				}
+			}
 		}
 	}
 
@@ -807,6 +951,18 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 		} else {
 			upstream.FailedRequests++
 		}
+
+		// Update tag group stats
+		if upstreamMetric, exists := ps.stats.UpstreamMetrics[req.Upstream]; exists && upstreamMetric.Tag != "" {
+			if tagGroup, exists := tagStats[upstreamMetric.Tag]; exists {
+				tagGroup.TotalRequests++
+				if req.Success {
+					tagGroup.SuccessRequests++
+				} else {
+					tagGroup.FailedRequests++
+				}
+			}
+		}
 	}
 
 	// Calculate averages and add upstream stats
@@ -821,8 +977,49 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 			us.AvgLatency = float64(us.TotalLatency) / float64(us.SuccessRequests)
 		}
 		us.CurrentConnections = ps.stats.UpstreamMetrics[upstream].CurrentConnections
+		// Copy tag from upstream metrics
+		if upstreamMetric, exists := ps.stats.UpstreamMetrics[upstream]; exists {
+			us.Tag = upstreamMetric.Tag
+		}
 		stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
 	}
+
+	// Finalize tag group stats
+	ps.healthMutex.RLock()
+	for tag, tagGroup := range tagStats {
+		// Calculate averages for tag groups
+		if tagGroup.SuccessRequests > 0 {
+			var totalTagLatency int64
+			for _, req := range ps.stats.RecentRequests {
+				if req.Timestamp.Before(cutoff) || !req.Success {
+					continue
+				}
+				if upstreamMetric, exists := ps.stats.UpstreamMetrics[req.Upstream]; exists && upstreamMetric.Tag == tag {
+					totalTagLatency += req.Latency
+				}
+			}
+			tagGroup.AvgLatency = float64(totalTagLatency) / float64(tagGroup.SuccessRequests)
+		}
+
+		// Count healthy/unhealthy upstreams for this tag
+		for _, weighted := range ps.weightedUpstreams {
+			if weighted.Tag == tag {
+				tagGroup.UpstreamCount++
+				if health, exists := ps.upstreamHealth[weighted.URL]; exists {
+					if health.IsHealthy {
+						tagGroup.HealthyCount++
+					} else {
+						tagGroup.UnhealthyCount++
+					}
+				} else {
+					tagGroup.HealthyCount++ // Assume healthy if no health record
+				}
+			}
+		}
+
+		stats.TagGroups[tag] = *tagGroup
+	}
+	ps.healthMutex.RUnlock()
 
 	return stats
 }
@@ -831,9 +1028,6 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	ps.mutex.RLock()
-	startTime := ps.stats.StartTime
-	ps.mutex.RUnlock()
-
 	stats := struct {
 		StartTime       time.Time       `json:"start_time"`
 		Uptime          string          `json:"uptime"`
@@ -841,12 +1035,13 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 		RecentStats     TimeWindowStats `json:"recent_15m"`
 		CurrentRequests int64           `json:"current_requests"`
 	}{
-		StartTime:       startTime,
-		Uptime:          time.Since(startTime).String(),
-		TotalStats:      ps.getTimeWindowStats(time.Since(startTime)),
+		StartTime:       ps.stats.StartTime,
+		Uptime:          time.Since(ps.stats.StartTime).String(),
+		TotalStats:      ps.getTimeWindowStats(time.Since(ps.stats.StartTime)),
 		RecentStats:     ps.getTimeWindowStats(15 * time.Minute),
 		CurrentRequests: atomic.LoadInt64(&ps.stats.CurrentRequests),
 	}
+	ps.mutex.RUnlock()
 
 	json.NewEncoder(w).Encode(stats)
 }
@@ -854,9 +1049,15 @@ func (ps *ProxyServer) handleStats(w http.ResponseWriter, r *http.Request) {
 func (ps *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ps.mutex.RLock()
 	statsEndpoint := ps.config.Server.StatsEndpoint
+	authEnabled := ps.config.Authentication.Enabled
 	ps.mutex.RUnlock()
-	
+
 	if r.URL.Path == statsEndpoint {
+		if authEnabled && !ps.authenticate(r) {
+			w.Header().Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			return
+		}
 		ps.handleStats(w, r)
 		return
 	}
@@ -893,7 +1094,7 @@ func writePidFile() {
 		return
 	}
 	defer file.Close()
-	
+
 	fmt.Fprintf(file, "%d\n", os.Getpid())
 	log.Printf("PID file created: %s", pidFile)
 }
@@ -914,15 +1115,15 @@ func parseUpstreamAuth(upstreamURL string) (host, auth string, err error) {
 		if len(parts) != 2 {
 			return "", "", fmt.Errorf("invalid URL format")
 		}
-		
+
 		authPart := parts[0]
 		host = parts[1]
-		
+
 		// URL decode the auth part for common cases
 		if strings.Contains(authPart, "%40") {
 			authPart = strings.ReplaceAll(authPart, "%40", "@")
 		}
-		
+
 		// Create basic auth header
 		auth = "Basic " + base64.StdEncoding.EncodeToString([]byte(authPart))
 	} else {
@@ -939,7 +1140,7 @@ var (
 
 func main() {
 	flag.Parse()
-	
+
 	if *showHelp {
 		fmt.Printf("Usage: %s [options]\n", os.Args[0])
 		fmt.Println("\nOptions:")
@@ -948,9 +1149,9 @@ func main() {
 		fmt.Println("  PROXY_CONFIG - Path to configuration file (overrides -config)")
 		os.Exit(0)
 	}
-	
+
 	writePidFile()
-	
+
 	// Priority: Environment variable > Command line flag > Default
 	configPath := *configFile
 	if envConfig := os.Getenv("PROXY_CONFIG"); envConfig != "" {

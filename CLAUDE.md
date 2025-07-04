@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go-based HTTP forward proxy server called "netdrift" that implements advanced weighted load balancing across multiple upstream proxies with intelligent health monitoring and automatic failover. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, upstream proxy authentication, and provides comprehensive statistics tracking.
+This is a Go-based HTTP forward proxy server called "netdrift" that implements advanced weighted load balancing across multiple upstream proxies with intelligent health monitoring and automatic failover. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, upstream proxy authentication, upstream tagging for grouped statistics and logging, and provides comprehensive statistics tracking.
 
 **Performance**: 4.4M operations/second (227ns/op) with stress-tested concurrent handling and automatic health management.
 
@@ -76,7 +76,41 @@ curl http://127.0.0.1:3130/stats
 The proxy uses `us.json` for configuration (or file specified via `PROXY_CONFIG` environment variable). Key sections:
 - **Server**: Listen address and stats endpoint
 - **Authentication**: Enable/disable with user credentials
-- **Upstream Proxies**: List of proxy servers with weights and enabled status
+- **Upstream Proxies**: List of proxy servers with weights, enabled status, and optional tags
+
+### Upstream Tagging
+
+Upstream proxies can be optionally tagged for better organization and monitoring:
+
+```json
+{
+  "upstream_proxies": [
+    {
+      "url": "http://proxy1.datacenter-east.com:8080",
+      "enabled": true,
+      "weight": 2,
+      "tag": "datacenter-east"
+    },
+    {
+      "url": "http://proxy2.datacenter-east.com:8080", 
+      "enabled": true,
+      "weight": 1,
+      "tag": "datacenter-east"
+    },
+    {
+      "url": "http://proxy1.provider-b.com:8080",
+      "enabled": true,
+      "weight": 3,
+      "tag": "provider-b"
+    }
+  ]
+}
+```
+
+**Tag Benefits:**
+- **Grouped Statistics**: View aggregated metrics per hosting provider or region
+- **Enhanced Logging**: Log messages include tag information for easier troubleshooting
+- **Health Monitoring**: Track health status grouped by tags for better operational visibility
 
 ## Statistics System
 
@@ -85,6 +119,7 @@ The proxy provides detailed statistics at the `/stats` endpoint including:
 - Per-upstream proxy metrics (latency, connections, requests)
 - Time-window statistics (total lifetime and recent 15-minute windows)
 - Current active connections and max concurrency
+- **Tag-grouped statistics**: Aggregated metrics by tag groups showing health and performance per provider/region
 
 ## Testing
 

@@ -23,6 +23,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9020", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9021", Enabled: true, Weight: 1},
@@ -62,6 +63,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9022", Enabled: true, Weight: 1},
 			},
@@ -98,6 +100,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9023", Enabled: true, Weight: 1},
 			},
@@ -135,6 +138,7 @@ func TestUpstreamFailover(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9024", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9025", Enabled: true, Weight: 1},
@@ -175,6 +179,7 @@ func TestUpstreamFailover(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9027", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9028", Enabled: true, Weight: 1},
@@ -192,8 +197,8 @@ func TestUpstreamFailover(t *testing.T) {
 
 		// Should either fallback to least-failed upstream or implement circuit breaker
 		upstream := ps.getNextUpstream()
-		
-		// Implementation decision during TDD: 
+
+		// Implementation decision during TDD:
 		// - Return least-failed upstream?
 		// - Return empty string to indicate no healthy upstreams?
 		// - Implement circuit breaker with timeout recovery?
@@ -210,6 +215,7 @@ func TestUpstreamFailover(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+				Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9029", Enabled: true, Weight: 3}, // High weight
 				{URL: "http://127.0.0.1:9030", Enabled: true, Weight: 1}, // Low weight
@@ -262,6 +268,7 @@ func TestHealthCheckInterval(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9032", Enabled: true, Weight: 1},
 		},
@@ -303,6 +310,7 @@ func TestConcurrentHealthManagement(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9033", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9034", Enabled: true, Weight: 1},
@@ -323,7 +331,7 @@ func TestConcurrentHealthManagement(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			
+
 			for j := 0; j < operationsPerGoroutine; j++ {
 				if id%2 == 0 {
 					// Even goroutines record failures
@@ -334,10 +342,10 @@ func TestConcurrentHealthManagement(t *testing.T) {
 					ps.recordUpstreamSuccess(upstream1)
 					ps.recordUpstreamFailure(upstream2)
 				}
-				
+
 				// Also test concurrent upstream selection
 				_ = ps.getNextUpstream()
-				
+
 				// Check health status
 				_ = ps.isUpstreamHealthy(upstream1)
 				_ = ps.isUpstreamHealthy(upstream2)
@@ -350,13 +358,13 @@ func TestConcurrentHealthManagement(t *testing.T) {
 	// Verify final state is consistent
 	failures1 := ps.getUpstreamFailureCount(upstream1)
 	failures2 := ps.getUpstreamFailureCount(upstream2)
-	
+
 	expectedFailures := (numGoroutines / 2) * operationsPerGoroutine
-	
+
 	if failures1 != expectedFailures {
 		t.Errorf("Expected %d failures for upstream1, got %d", expectedFailures, failures1)
 	}
-	
+
 	if failures2 != expectedFailures {
 		t.Errorf("Expected %d failures for upstream2, got %d", expectedFailures, failures2)
 	}
@@ -364,7 +372,7 @@ func TestConcurrentHealthManagement(t *testing.T) {
 	// Health status should be deterministic based on failure counts
 	health1 := ps.isUpstreamHealthy(upstream1)
 	health2 := ps.isUpstreamHealthy(upstream2)
-	
+
 	t.Logf("Final health status - upstream1: %v, upstream2: %v", health1, health2)
 	t.Logf("Final failure counts - upstream1: %d, upstream2: %d", failures1, failures2)
 }
@@ -378,6 +386,7 @@ func TestCircuitBreakerBehavior(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9035", Enabled: true, Weight: 1},
 		},
@@ -442,6 +451,7 @@ func TestHealthMetricsExport(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9036", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9037", Enabled: true, Weight: 1},
@@ -462,20 +472,20 @@ func TestHealthMetricsExport(t *testing.T) {
 	expectedMetrics := map[string]interface{}{
 		"upstreams": map[string]interface{}{
 			"http://127.0.0.1:9036": map[string]interface{}{
-				"healthy":        false,
-				"failure_count":  2,
-				"success_count":  0,
-				"circuit_state":  "OPEN",
-				"last_failure":   "timestamp",
-				"last_success":   nil,
+				"healthy":       false,
+				"failure_count": 2,
+				"success_count": 0,
+				"circuit_state": "OPEN",
+				"last_failure":  "timestamp",
+				"last_success":  nil,
 			},
 			"http://127.0.0.1:9037": map[string]interface{}{
-				"healthy":        true,
-				"failure_count":  0,
-				"success_count":  1,
-				"circuit_state":  "CLOSED",
-				"last_failure":   nil,
-				"last_success":   "timestamp",
+				"healthy":       true,
+				"failure_count": 0,
+				"success_count": 1,
+				"circuit_state": "CLOSED",
+				"last_failure":  nil,
+				"last_success":  "timestamp",
 			},
 		},
 		"total_healthy_upstreams":   1,

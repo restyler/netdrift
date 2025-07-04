@@ -42,6 +42,7 @@ func TestBasicConcurrency(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9996", Enabled: true, Weight: 1}, // Non-existent upstream
 		},
@@ -147,6 +148,7 @@ func TestProxyRoundRobin(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9995", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9994", Enabled: true, Weight: 1},
@@ -211,6 +213,7 @@ func TestAuthenticationFlow(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9992", Enabled: true, Weight: 1},
 		},

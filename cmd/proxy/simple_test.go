@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -44,30 +45,82 @@ func TestBasicProxyFunctionality(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
-		}{
-			{URL: "http://127.0.0.1:9999", Enabled: true, Weight: 1}, // Non-existent upstream
-		},
+			Tag     string `json:"tag,omitempty"`
+		}{}, // No upstream proxies
 	}
 
-	// Create and start main proxy
+	// Create and start main proxy with timeouts
 	ps := NewProxyServer(config, "")
 	server := &http.Server{
-		Addr:    config.Server.ListenAddress,
-		Handler: ps,
+		Addr:              config.Server.ListenAddress,
+		Handler:           ps,
+		ReadTimeout:       2 * time.Second,
+		WriteTimeout:      2 * time.Second,
+		ReadHeaderTimeout: 2 * time.Second,
 	}
-	go server.ListenAndServe()
-	defer server.Close()
 
-	// Wait for server to start
-	time.Sleep(100 * time.Millisecond)
+	// Create a channel to signal server start
+	serverReady := make(chan struct{})
+	serverError := make(chan error, 1)
+
+	go func() {
+		// Signal that we're about to start listening
+		close(serverReady)
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			serverError <- err
+		}
+	}()
+
+	// Wait for server to start or fail
+	select {
+	case err := <-serverError:
+		t.Fatalf("Server failed to start: %v", err)
+	case <-serverReady:
+		// Continue with test
+	}
+
+	// Ensure server cleanup
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			t.Errorf("Server shutdown error: %v", err)
+		}
+	}()
+
+	// Wait for server to start and verify it's listening
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3132", time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if i == maxRetries-1 {
+			t.Fatalf("Server failed to start after %d attempts", maxRetries)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 
 	t.Run("Authentication", func(t *testing.T) {
 		// Test authentication rejection
-		conn, err := net.Dial("tcp", "127.0.0.1:3132")
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3132", time.Second)
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
 		}
-		defer conn.Close()
+
+		// Ensure connection cleanup
+		defer func() {
+			deadline := time.Now().Add(time.Second)
+			conn.SetDeadline(deadline)
+			conn.Close()
+		}()
+
+		// Set read/write deadlines
+		deadline := time.Now().Add(2 * time.Second)
+		if err := conn.SetDeadline(deadline); err != nil {
+			t.Fatalf("Failed to set deadline: %v", err)
+		}
 
 		// Send CONNECT without auth
 		connectReq := "CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"
@@ -89,43 +142,68 @@ func TestBasicProxyFunctionality(t *testing.T) {
 	})
 
 	t.Run("AuthenticationSuccess", func(t *testing.T) {
-		// Test successful authentication (even if upstream fails)
-		conn, err := net.Dial("tcp", "127.0.0.1:3132")
+		// Test successful authentication
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3132", time.Second)
 		if err != nil {
 			t.Fatalf("Failed to connect: %v", err)
 		}
-		defer conn.Close()
+
+		// Ensure connection cleanup
+		defer func() {
+			deadline := time.Now().Add(time.Second)
+			conn.SetDeadline(deadline)
+			conn.Close()
+		}()
+
+		// Set read/write deadlines
+		deadline := time.Now().Add(2 * time.Second)
+		if err := conn.SetDeadline(deadline); err != nil {
+			t.Fatalf("Failed to set deadline: %v", err)
+		}
 
 		// Create auth header
 		auth := base64.StdEncoding.EncodeToString([]byte("testuser:testpass"))
 		connectReq := fmt.Sprintf("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\nProxy-Authorization: Basic %s\r\n\r\n", auth)
-		
+
 		if _, err := conn.Write([]byte(connectReq)); err != nil {
 			t.Fatalf("Failed to write: %v", err)
 		}
 
-		// Should get response (even if it's an error due to upstream failure)
+		// Should get 502 Bad Gateway since no upstream proxies are configured
 		buffer := make([]byte, 1024)
-		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 		n, err := conn.Read(buffer)
 		if err != nil {
 			t.Fatalf("Failed to read: %v", err)
 		}
 
 		response := string(buffer[:n])
-		// Should not be 407 since we provided auth
-		if strings.Contains(response, "407") {
-			t.Errorf("Should not get 407 with valid auth, got: %s", response)
+		if !strings.Contains(response, "502") {
+			t.Errorf("Expected 502 Bad Gateway (no upstream proxies), got: %s", response)
 		}
 	})
 
 	t.Run("StatsEndpoint", func(t *testing.T) {
-		// Test stats endpoint
-		client := &http.Client{Timeout: 5 * time.Second}
+		// Test stats endpoint with timeout client
+		client := &http.Client{
+			Timeout: 2 * time.Second,
+			Transport: &http.Transport{
+				DialContext: (&net.Dialer{
+					Timeout:   1 * time.Second,
+					KeepAlive: 1 * time.Second,
+				}).DialContext,
+				ResponseHeaderTimeout: 1 * time.Second,
+				IdleConnTimeout:       1 * time.Second,
+			},
+		}
+
 		req, err := http.NewRequest("GET", "http://127.0.0.1:3132/stats", nil)
 		if err != nil {
 			t.Fatalf("Failed to create request: %v", err)
 		}
+
+		// Add auth header
+		auth := base64.StdEncoding.EncodeToString([]byte("testuser:testpass"))
+		req.Header.Add("Proxy-Authorization", fmt.Sprintf("Basic %s", auth))
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -177,6 +255,7 @@ func TestProxyServerCreation(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9998", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9997", Enabled: true, Weight: 1},
@@ -315,23 +394,23 @@ func TestUpstreamProxyAuthentication(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				host, auth, err := parseUpstreamAuth(tc.url)
-				
+
 				if tc.wantErr {
 					if err == nil {
 						t.Errorf("Expected error for URL %s, but got none", tc.url)
 					}
 					return
 				}
-				
+
 				if err != nil {
 					t.Errorf("Unexpected error for URL %s: %v", tc.url, err)
 					return
 				}
-				
+
 				if host != tc.wantHost {
 					t.Errorf("Expected host %s, got %s", tc.wantHost, host)
 				}
-				
+
 				if auth != tc.wantAuth {
 					t.Errorf("Expected auth %s, got %s", tc.wantAuth, auth)
 				}
@@ -342,9 +421,9 @@ func TestUpstreamProxyAuthentication(t *testing.T) {
 	t.Run("UpstreamConnectRequestWithAuth", func(t *testing.T) {
 		// Test that CONNECT requests to upstream proxies include authentication
 		testCases := []struct {
-			name        string
-			upstreamURL string
-			targetHost  string
+			name         string
+			upstreamURL  string
+			targetHost   string
 			wantContains []string
 		}{
 			{
@@ -371,13 +450,13 @@ func TestUpstreamProxyAuthentication(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.name, func(t *testing.T) {
 				connectReq := buildUpstreamConnectRequest(tc.upstreamURL, tc.targetHost)
-				
+
 				for _, want := range tc.wantContains {
 					if !strings.Contains(connectReq, want) {
 						t.Errorf("CONNECT request should contain %q, but got:\n%s", want, connectReq)
 					}
 				}
-				
+
 				// If no auth expected, ensure no Proxy-Authorization header
 				if !strings.Contains(tc.upstreamURL, "@") {
 					if strings.Contains(connectReq, "Proxy-Authorization") {

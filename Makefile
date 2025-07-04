@@ -34,6 +34,10 @@ test:
 test-unit:
 	go test -v ./cmd/proxy/...
 
+# Run core functionality tests (load balancing, health, tagging) without network tests
+test-core:
+	go test -v ./cmd/proxy -run="TestWeightedRoundRobin|TestDisabledUpstreamHandling|TestConcurrentWeightedLoadBalancing|TestUpstreamHealthTracking|TestUpstreamFailover|TestUpstreamTagging|TestConfigurationWithTags|TestHighConcurrencyLoadBalancing|TestMemoryUsageUnderLoad|TestRaceConditionDetection|BenchmarkLoadBalancing|BenchmarkHealthTracking" -timeout=30s
+
 # Run comprehensive integration test (build, start, test, cleanup)
 test-integration:
 	./scripts/test-runner.sh

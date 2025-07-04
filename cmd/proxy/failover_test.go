@@ -15,6 +15,7 @@ func TestUpstreamFailoverScenarios(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9070", Enabled: true, Weight: 2},
 				{URL: "http://127.0.0.1:9071", Enabled: true, Weight: 2},
@@ -98,6 +99,7 @@ func TestUpstreamFailoverScenarios(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9073", Enabled: true, Weight: 1},
 				{URL: "http://127.0.0.1:9074", Enabled: true, Weight: 1},
@@ -184,6 +186,7 @@ func TestUpstreamFailoverScenarios(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9077", Enabled: true, Weight: 5}, // High capacity
 				{URL: "http://127.0.0.1:9078", Enabled: true, Weight: 3}, // Medium capacity
@@ -244,6 +247,7 @@ func TestFailoverUnderLoad(t *testing.T) {
 			URL     string `json:"url"`
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9080", Enabled: true, Weight: 1},
 			{URL: "http://127.0.0.1:9081", Enabled: true, Weight: 1},
@@ -335,6 +339,7 @@ func TestFailoverThresholds(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9083", Enabled: true, Weight: 1},
 			},
@@ -370,6 +375,7 @@ func TestFailoverThresholds(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9084", Enabled: true, Weight: 1},
 			},
@@ -406,6 +412,7 @@ func TestFailoverThresholds(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9085", Enabled: true, Weight: 1},
 			},
@@ -443,6 +450,7 @@ func TestFailoverRecoveryPatterns(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9086", Enabled: true, Weight: 1},
 			},
@@ -474,6 +482,7 @@ func TestFailoverRecoveryPatterns(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9087", Enabled: true, Weight: 1},
 			},
@@ -515,6 +524,7 @@ func TestFailoverRecoveryPatterns(t *testing.T) {
 				URL     string `json:"url"`
 				Enabled bool   `json:"enabled"`
 				Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
 			}{
 				{URL: "http://127.0.0.1:9088", Enabled: true, Weight: 1},
 			},

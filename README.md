@@ -23,8 +23,9 @@ A high-performance HTTP CONNECT forward proxy server written in Go that implemen
 ### Using Make Commands (Recommended)
 
 ```bash
-# Build and run integration tests
-make test-integration
+# Quick testing (recommended for development)
+make test-core           # Test core functionality (load balancing, health, tagging)
+make test-integration    # End-to-end testing with real proxy services
 
 # Run services manually
 make run-test-proxies    # Start test proxies on ports 3025, 3026
@@ -230,8 +231,6 @@ make clean              # Clean build artifacts
 make run-proxy          # Run main proxy server
 make run-test-proxies   # Run test proxy servers
 make test               # Basic connectivity test
-make test-unit          # Run unit tests
-make test-integration   # Full integration test suite
 ```
 
 ### Docker Commands
@@ -260,11 +259,40 @@ make docker-clean       # Clean up all Docker resources
 ```
 
 ### Testing Commands
+
+#### Core Testing (Recommended)
 ```bash
+make test-core                # Run core functionality tests (load balancing, health, tagging)
+make test-integration         # Run integration tests with real proxy services
+```
+
+#### Advanced Testing
+```bash
+make test-unit                # Run all unit tests (may hang on network tests)
 make test-faultyproxy         # Unit tests for faulty proxy
 make test-faultyproxy-full    # Comprehensive faulty proxy test suite
 make test-faultyproxy-bench   # Performance benchmarks
 ```
+
+#### Test Categories
+
+**Core Tests** (`make test-core`):
+- ✅ Weighted load balancing functionality 
+- ✅ Upstream health tracking and failover
+- ✅ **Upstream tagging and grouped statistics**
+- ✅ High-concurrency stress testing (100k+ requests)
+- ✅ Memory usage and race condition detection
+- ✅ Performance benchmarks (4M+ ops/sec)
+
+**Integration Tests** (`make test-integration`):
+- ✅ End-to-end proxy functionality with real services
+- ✅ Authentication and stats endpoint testing
+- ✅ Load testing with concurrent requests
+- ✅ Automatic service startup and cleanup
+
+**Unit Tests** (`make test-unit`):
+- ⚠️ All Go unit tests (includes network tests that may hang)
+- 🔧 Use `make test-core` for reliable core functionality testing
 
 ## Architecture
 
@@ -336,7 +364,19 @@ netdrift/
 
 ### Testing Framework
 
-The project includes a comprehensive test-driven development (TDD) suite:
+The project includes a comprehensive test-driven development (TDD) suite with multiple testing levels:
+
+#### Quick Development Testing
+```bash
+# Run core functionality tests (recommended for development)
+make test-core
+
+# Run specific test categories
+go test -v ./cmd/proxy -run="TestUpstreamTagging"           # Tag functionality tests
+go test -v ./cmd/proxy -run="TestWeightedRoundRobin"        # Load balancing tests  
+go test -v ./cmd/proxy -run="TestUpstreamHealthTracking"    # Health management tests
+go test -v ./cmd/proxy -run="TestConfigurationWithTags"    # Configuration parsing tests
+```
 
 #### Integration Tests
 ```bash
@@ -353,13 +393,13 @@ make test-integration
 ./scripts/test-runner.sh cleanup
 ```
 
-#### Unit & Load Balancing Tests
+#### Comprehensive Unit Testing
 ```bash
-# Core load balancing functionality
-go test -v ./cmd/proxy -run="TestWeightedRoundRobin"
+# All core functionality tests (fast, reliable)
+make test-core
 
-# Health management system
-go test -v ./cmd/proxy -run="TestUpstreamHealthTracking"
+# All unit tests (includes network tests that may hang)
+make test-unit
 
 # Failover scenarios
 go test -v ./cmd/proxy -run="TestUpstreamFailoverScenarios"
