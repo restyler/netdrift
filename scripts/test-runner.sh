@@ -218,7 +218,7 @@ run_tests() {
         stats_response=$(curl -s "http://127.0.0.1:$MAIN_PROXY_PORT/stats" 2>/dev/null)
     fi
     
-    if echo "$stats_response" | grep -q "total_requests"; then
+    if echo "$stats_response" | grep -q "total_reqs"; then
         success "Stats endpoint test passed"
     else
         error "Stats endpoint test failed"

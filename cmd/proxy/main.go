@@ -41,12 +41,12 @@ type UpstreamStats struct {
 	URL                string    `json:"url"`
 	Tag                string    `json:"tag,omitempty"`
 	Index              int       `json:"index"`
-	TotalRequests      int64     `json:"total_requests"`
-	SuccessRequests    int64     `json:"success_requests"`
-	FailedRequests     int64     `json:"failed_requests"`
+	TotalRequests      int64     `json:"total_reqs"`
+	SuccessRequests    int64     `json:"success_reqs"`
+	FailedRequests     int64     `json:"failed_reqs"`
 	TotalLatency       int64     `json:"total_latency_ms"`
 	AvgLatency         float64   `json:"avg_latency_ms"`
-	CurrentConnections int64     `json:"current_connections"`
+	CurrentConnections int64     `json:"current_cons"`
 	LastRequest        time.Time `json:"last_request"`
 }
 
@@ -69,9 +69,9 @@ type WeightedUpstream struct {
 
 type TimeWindowStats struct {
 	Window          string                   `json:"window"`
-	TotalRequests   int64                    `json:"total_requests"`
-	SuccessRequests int64                    `json:"success_requests"`
-	FailedRequests  int64                    `json:"failed_requests"`
+	TotalRequests   int64                    `json:"total_reqs"`
+	SuccessRequests int64                    `json:"success_reqs"`
+	FailedRequests  int64                    `json:"failed_reqs"`
 	AvgLatency      float64                  `json:"avg_latency_ms"`
 	MaxConcurrency  int64                    `json:"max_concurrency"`
 	UpstreamMetrics []UpstreamStats          `json:"upstream_metrics"`
@@ -80,9 +80,9 @@ type TimeWindowStats struct {
 
 type TagGroupStats struct {
 	Tag             string  `json:"tag"`
-	TotalRequests   int64   `json:"total_requests"`
-	SuccessRequests int64   `json:"success_requests"`
-	FailedRequests  int64   `json:"failed_requests"`
+	TotalRequests   int64   `json:"total_reqs"`
+	SuccessRequests int64   `json:"success_reqs"`
+	FailedRequests  int64   `json:"failed_reqs"`
 	AvgLatency      float64 `json:"avg_latency_ms"`
 	UpstreamCount   int     `json:"upstream_count"`
 	HealthyCount    int     `json:"healthy_count"`
