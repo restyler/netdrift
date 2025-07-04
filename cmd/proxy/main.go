@@ -40,7 +40,7 @@ type Config struct {
 type UpstreamStats struct {
 	URL                string    `json:"url"`
 	Tag                string    `json:"tag,omitempty"`
-	Index              int       `json:"index,omitempty"`
+	Index              int       `json:"index"`
 	TotalRequests      int64     `json:"total_requests"`
 	SuccessRequests    int64     `json:"success_requests"`
 	FailedRequests     int64     `json:"failed_requests"`
