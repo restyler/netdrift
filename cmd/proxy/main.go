@@ -705,6 +705,64 @@ func (ps *ProxyServer) authenticate(r *http.Request) bool {
 	return false
 }
 
+// authenticateHTTP checks both Authorization and Proxy-Authorization headers for HTTP requests
+func (ps *ProxyServer) authenticateHTTP(r *http.Request) bool {
+	ps.mutex.RLock()
+	config := ps.config
+	ps.mutex.RUnlock()
+
+	if !config.Authentication.Enabled {
+		log.Printf("Authentication disabled, allowing request")
+		return true
+	}
+
+	// For HTTP requests like GET /stats, check both standard Authorization and Proxy-Authorization headers
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		authHeader = r.Header.Get("Proxy-Authorization")
+	}
+	
+	if authHeader == "" {
+		log.Printf("No auth credentials provided")
+		return false
+	}
+
+	// Parse Basic authentication
+	if !strings.HasPrefix(authHeader, "Basic ") {
+		log.Printf("Auth is not Basic authentication")
+		return false
+	}
+
+	// Decode base64 credentials
+	encoded := authHeader[6:] // Remove "Basic " prefix
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		log.Printf("Failed to decode auth: %v", err)
+		return false
+	}
+
+	// Split username:password
+	credentials := string(decoded)
+	parts := strings.SplitN(credentials, ":", 2)
+	if len(parts) != 2 {
+		log.Printf("Invalid credential format")
+		return false
+	}
+
+	username, password := parts[0], parts[1]
+	log.Printf("HTTP authentication attempt for user: %s", username)
+
+	for _, user := range config.Authentication.Users {
+		if user.Username == username && user.Password == password {
+			log.Printf("HTTP authentication successful for user: %s", username)
+			return true
+		}
+	}
+
+	log.Printf("HTTP authentication failed for user: %s", username)
+	return false
+}
+
 func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 	startTime := time.Now()
 
@@ -1096,9 +1154,9 @@ func (ps *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ps.mutex.RUnlock()
 
 	if r.URL.Path == statsEndpoint {
-		if authEnabled && !ps.authenticate(r) {
-			w.Header().Set("Proxy-Authenticate", "Basic realm=\"Proxy\"")
-			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+		if authEnabled && !ps.authenticateHTTP(r) {
+			w.Header().Set("WWW-Authenticate", "Basic realm=\"Stats\"")
+			http.Error(w, "Authentication Required", http.StatusUnauthorized)
 			return
 		}
 		ps.handleStats(w, r)

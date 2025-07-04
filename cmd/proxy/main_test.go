@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -348,4 +349,161 @@ func TestInvalidEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status %d for invalid endpoint, got %d", http.StatusMethodNotAllowed, resp.StatusCode)
 	}
+}
+
+func TestStatsEndpointHTTPAuth(t *testing.T) {
+	// Create test configuration
+	config := &Config{
+		Server: struct {
+			Name          string `json:"name"`
+			ListenAddress string `json:"listen_address"`
+			StatsEndpoint string `json:"stats_endpoint"`
+		}{
+			Name:          "Test Proxy",
+			ListenAddress: "127.0.0.1:3149",
+			StatsEndpoint: "/stats",
+		},
+		Authentication: struct {
+			Enabled bool `json:"enabled"`
+			Users   []struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			} `json:"users"`
+		}{
+			Enabled: true,
+			Users: []struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}{
+				{Username: "testuser", Password: "testpass"},
+			},
+		},
+		UpstreamProxies: []struct {
+			URL     string `json:"url"`
+			Enabled bool   `json:"enabled"`
+			Weight  int    `json:"weight"`
+			Tag     string `json:"tag,omitempty"`
+		}{}, // Empty upstream proxies list
+	}
+
+	// Create proxy server
+	ps := NewProxyServer(config, "")
+
+	// Start server with timeouts
+	server := &http.Server{
+		Addr:              config.Server.ListenAddress,
+		Handler:           ps,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go server.ListenAndServe()
+	defer server.Close()
+
+	// Wait for server to start and verify it's listening
+	maxRetries := 10
+	for i := 0; i < maxRetries; i++ {
+		conn, err := net.DialTimeout("tcp", "127.0.0.1:3149", time.Second)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		if i == maxRetries-1 {
+			t.Fatalf("Server failed to start after %d attempts", maxRetries)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Create authentication header
+	auth := base64.StdEncoding.EncodeToString([]byte("testuser:testpass"))
+
+	// Test stats endpoint with standard Authorization header
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+	
+	t.Run("StandardAuthorizationHeader", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "http://127.0.0.1:3149/stats", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		req.Header.Add("Authorization", fmt.Sprintf("Basic %s", auth))
+		
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to get stats: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Should get successful response
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		}
+
+		var stats map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			t.Fatalf("Failed to decode stats: %v", err)
+		}
+
+		// Check basic stats structure
+		if _, ok := stats["start_time"]; !ok {
+			t.Error("Stats should have start_time")
+		}
+	})
+
+	t.Run("ProxyAuthorizationHeader", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "http://127.0.0.1:3149/stats", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		req.Header.Add("Proxy-Authorization", fmt.Sprintf("Basic %s", auth))
+		
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to get stats: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Should get successful response
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		}
+
+		var stats map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&stats); err != nil {
+			t.Fatalf("Failed to decode stats: %v", err)
+		}
+
+		// Check basic stats structure
+		if _, ok := stats["start_time"]; !ok {
+			t.Error("Stats should have start_time")
+		}
+	})
+
+	t.Run("NoAuthHeader", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "http://127.0.0.1:3149/stats", nil)
+		if err != nil {
+			t.Fatalf("Failed to create request: %v", err)
+		}
+		
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Failed to get stats: %v", err)
+		}
+		defer resp.Body.Close()
+
+		// Should get 401 Unauthorized
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("Expected status 401, got %d", resp.StatusCode)
+		}
+
+		// Should have WWW-Authenticate header
+		wwwAuth := resp.Header.Get("WWW-Authenticate")
+		if wwwAuth == "" {
+			t.Error("Expected WWW-Authenticate header")
+		}
+		if !strings.Contains(wwwAuth, "Basic") {
+			t.Errorf("Expected Basic auth in WWW-Authenticate header, got: %s", wwwAuth)
+		}
+	})
 }
