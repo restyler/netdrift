@@ -17,12 +17,14 @@
       {
         "url": "http://127.0.0.1:3025",
         "enabled": true,
-        "weight": 1
+        "weight": 1,
+        "note": "Primary test proxy server"
       },
       {
         "url": "http://127.0.0.1:3026",
         "enabled": true,
-        "weight": 1
+        "weight": 1,
+        "note": "Secondary test proxy server"
       }
     ]
   } 

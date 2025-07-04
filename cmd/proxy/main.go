@@ -34,6 +34,7 @@ type Config struct {
 		Enabled bool   `json:"enabled"`
 		Weight  int    `json:"weight"`
 		Tag     string `json:"tag,omitempty"`
+		Note    string `json:"note,omitempty"`
 	} `json:"upstream_proxies"`
 }
 
