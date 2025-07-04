@@ -26,5 +26,6 @@
         "weight": 1,
         "note": "Secondary test proxy server"
       }
-    ]
+    ],
+    "upstream_timeout": 5
   } 

@@ -36,6 +36,7 @@ type Config struct {
 		Tag     string `json:"tag,omitempty"`
 		Note    string `json:"note,omitempty"`
 	} `json:"upstream_proxies"`
+	UpstreamTimeout int `json:"upstream_timeout,omitempty"`
 }
 
 type UpstreamStats struct {
@@ -817,8 +818,16 @@ func (ps *ProxyServer) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get configurable timeout with 5s default
+	timeout := 5 * time.Second
+	ps.mutex.RLock()
+	if ps.config.UpstreamTimeout > 0 {
+		timeout = time.Duration(ps.config.UpstreamTimeout) * time.Second
+	}
+	ps.mutex.RUnlock()
+
 	// Connect to upstream proxy
-	upstreamConn, err := net.DialTimeout("tcp", upstreamHost, 5*time.Second)
+	upstreamConn, err := net.DialTimeout("tcp", upstreamHost, timeout)
 	if err != nil {
 		atomic.AddInt64(&ps.stats.FailedRequests, 1)
 		atomic.AddInt64(&upstreamStats.FailedRequests, 1)
