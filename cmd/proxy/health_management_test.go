@@ -6,8 +6,8 @@ import (
 	"time"
 )
 
-// TestUpstreamHealthTracking tests upstream health monitoring and failure tracking
-func TestUpstreamHealthTracking(t *testing.T) {
+// TestUpstreamStatsTrackingBasic tests basic upstream stats tracking functionality  
+func TestUpstreamStatsTrackingBasic(t *testing.T) {
 	t.Run("FailureCountTracking", func(t *testing.T) {
 		config := &Config{
 			Server: struct {
@@ -58,7 +58,7 @@ func TestUpstreamHealthTracking(t *testing.T) {
 		}
 	})
 
-	t.Run("HealthStatusTracking", func(t *testing.T) {
+	t.Run("HealthStatusAlwaysTrue", func(t *testing.T) {
 		config := &Config{
 			UpstreamProxies: []struct {
 				URL     string `json:"url"`
@@ -85,18 +85,19 @@ func TestUpstreamHealthTracking(t *testing.T) {
 			t.Error("Upstream should be healthy after success")
 		}
 
-		// After multiple failures, should become unhealthy
+		// Record multiple failures (stats tracking only - upstream stays healthy)
 		failureThreshold := 3
 		for i := 0; i < failureThreshold; i++ {
 			ps.recordUpstreamFailure(upstream)
 		}
 
-		if ps.isUpstreamHealthy(upstream) {
-			t.Error("Upstream should be unhealthy after multiple failures")
+		// Note: With passive health checks disabled, upstream should remain healthy
+		if !ps.isUpstreamHealthy(upstream) {
+			t.Error("Upstream should remain healthy (passive health checks disabled)")
 		}
 	})
 
-	t.Run("HealthRecovery", func(t *testing.T) {
+	t.Run("StatsTrackingWithoutRecovery", func(t *testing.T) {
 		config := &Config{
 			UpstreamProxies: []struct {
 				URL     string `json:"url"`
@@ -112,30 +113,32 @@ func TestUpstreamHealthTracking(t *testing.T) {
 		ps := NewProxyServer(config, "")
 		upstream := "http://127.0.0.1:9023"
 
-		// Make upstream unhealthy
+		// Record failures (stats tracking only)
 		for i := 0; i < 5; i++ {
 			ps.recordUpstreamFailure(upstream)
 		}
 
-		if ps.isUpstreamHealthy(upstream) {
-			t.Error("Upstream should be unhealthy after failures")
+		// Note: With passive health checks disabled, upstream should remain healthy
+		if !ps.isUpstreamHealthy(upstream) {
+			t.Error("Upstream should remain healthy (passive health checks disabled)")
 		}
 
-		// Record successful requests to recover health
+		// Record successful requests (stats tracking only)
 		successThreshold := 2
 		for i := 0; i < successThreshold; i++ {
 			ps.recordUpstreamSuccess(upstream)
 		}
 
+		// Upstream should still be healthy
 		if !ps.isUpstreamHealthy(upstream) {
-			t.Error("Upstream should recover health after successful requests")
+			t.Error("Upstream should remain healthy (passive health checks disabled)")
 		}
 	})
 }
 
-// TestUpstreamFailover tests automatic failover to healthy upstreams
-func TestUpstreamFailover(t *testing.T) {
-	t.Run("SkipUnhealthyUpstreams", func(t *testing.T) {
+// TestUpstreamSelectionWithStats tests upstream selection continues despite failure stats
+func TestUpstreamSelectionWithStats(t *testing.T) {
+	t.Run("AllUpstreamsStillSelected", func(t *testing.T) {
 		config := &Config{
 			UpstreamProxies: []struct {
 				URL     string `json:"url"`
@@ -152,32 +155,37 @@ func TestUpstreamFailover(t *testing.T) {
 
 		ps := NewProxyServer(config, "")
 
-		// Make middle upstream unhealthy
-		unhealthyUpstream := "http://127.0.0.1:9025"
+		// Record failures for middle upstream (stats tracking only)
+		middleUpstream := "http://127.0.0.1:9025"
 		for i := 0; i < 5; i++ {
-			ps.recordUpstreamFailure(unhealthyUpstream)
+			ps.recordUpstreamFailure(middleUpstream)
 		}
 
-		// Track upstream selections
+		// Track upstream selections - with passive health checks disabled,
+		// all upstreams should be selected including the one with failures
 		upstreamCounts := make(map[string]int)
 		for i := 0; i < 100; i++ {
 			upstream := ps.getNextUpstream()
 			upstreamCounts[upstream]++
 		}
 
-		// Unhealthy upstream should not be selected
-		if count, exists := upstreamCounts[unhealthyUpstream]; exists && count > 0 {
-			t.Errorf("Unhealthy upstream was selected %d times", count)
+		// With passive health checks disabled, all upstreams should be selected
+		// including the one with recorded failures
+		if count, exists := upstreamCounts[middleUpstream]; !exists || count == 0 {
+			t.Error("Middle upstream should still be selected (passive health checks disabled)")
 		}
 
-		// Only healthy upstreams should be selected
-		healthyCount := upstreamCounts["http://127.0.0.1:9024"] + upstreamCounts["http://127.0.0.1:9026"]
-		if healthyCount != 100 {
-			t.Errorf("Expected 100 selections from healthy upstreams, got %d", healthyCount)
+		// All upstreams should be selected roughly equally
+		totalSelections := 0
+		for _, count := range upstreamCounts {
+			totalSelections += count
+		}
+		if totalSelections != 100 {
+			t.Errorf("Expected 100 total selections, got %d", totalSelections)
 		}
 	})
 
-	t.Run("AllUpstreamsUnhealthy", func(t *testing.T) {
+	t.Run("AllUpstreamsWithFailures", func(t *testing.T) {
 		config := &Config{
 			UpstreamProxies: []struct {
 				URL     string `json:"url"`
@@ -193,28 +201,25 @@ func TestUpstreamFailover(t *testing.T) {
 
 		ps := NewProxyServer(config, "")
 
-		// Make all upstreams unhealthy
+		// Record failures for all upstreams (stats tracking only)
 		for _, proxy := range config.UpstreamProxies {
 			for i := 0; i < 5; i++ {
 				ps.recordUpstreamFailure(proxy.URL)
 			}
 		}
 
-		// Should either fallback to least-failed upstream or implement circuit breaker
+		// With passive health checks disabled, upstreams should still be selected
 		upstream := ps.getNextUpstream()
 
-		// Implementation decision during TDD:
-		// - Return least-failed upstream?
-		// - Return empty string to indicate no healthy upstreams?
-		// - Implement circuit breaker with timeout recovery?
+		// Upstream should still be selected despite recorded failures
 		if upstream == "" {
-			t.Log("No upstream selected when all are unhealthy (circuit breaker behavior)")
+			t.Error("Expected upstream to be selected (passive health checks disabled)")
 		} else {
-			t.Logf("Selected upstream %s when all are unhealthy (fallback behavior)", upstream)
+			t.Logf("Selected upstream %s despite recorded failures (passive health checks disabled)", upstream)
 		}
 	})
 
-	t.Run("FailoverWithWeights", func(t *testing.T) {
+	t.Run("WeightedSelectionWithFailures", func(t *testing.T) {
 		config := &Config{
 			UpstreamProxies: []struct {
 				URL     string `json:"url"`
@@ -266,7 +271,7 @@ func TestUpstreamFailover(t *testing.T) {
 }
 
 // TestHealthCheckInterval tests periodic health checking
-func TestHealthCheckInterval(t *testing.T) {
+func TestStatsTrackingInterval(t *testing.T) {
 	t.Skip("Periodic health checks not yet implemented - will be added during TDD")
 
 	config := &Config{
@@ -311,7 +316,7 @@ func TestHealthCheckInterval(t *testing.T) {
 }
 
 // TestConcurrentHealthManagement tests health tracking under concurrent load
-func TestConcurrentHealthManagement(t *testing.T) {
+func TestConcurrentStatsManagement(t *testing.T) {
 	config := &Config{
 		UpstreamProxies: []struct {
 			URL     string `json:"url"`
@@ -385,9 +390,9 @@ func TestConcurrentHealthManagement(t *testing.T) {
 	t.Logf("Final failure counts - upstream1: %d, upstream2: %d", failures1, failures2)
 }
 
-// TestCircuitBreakerBehavior tests circuit breaker pattern implementation
-func TestCircuitBreakerBehavior(t *testing.T) {
-	t.Skip("Circuit breaker not yet implemented - will be added during TDD")
+// TestStatsWithoutCircuitBreaker verifies that stats are tracked without circuit breaker behavior  
+func TestStatsWithoutCircuitBreaker(t *testing.T) {
+	// Note: Circuit breaker functionality removed - not applicable without passive health checks
 
 	config := &Config{
 		UpstreamProxies: []struct {
@@ -395,7 +400,7 @@ func TestCircuitBreakerBehavior(t *testing.T) {
 			Enabled bool   `json:"enabled"`
 			Weight  int    `json:"weight"`
 			Tag     string `json:"tag,omitempty"`
-		Note    string `json:"note,omitempty"`
+			Note    string `json:"note,omitempty"`
 		}{
 			{URL: "http://127.0.0.1:9035", Enabled: true, Weight: 1},
 		},
@@ -404,55 +409,36 @@ func TestCircuitBreakerBehavior(t *testing.T) {
 	ps := NewProxyServer(config, "")
 	upstream := "http://127.0.0.1:9035"
 
-	// Test circuit breaker states: CLOSED -> OPEN -> HALF_OPEN -> CLOSED
-
-	// 1. Start in CLOSED state (normal operation)
-	state := ps.getCircuitBreakerState(upstream)
-	if state != "CLOSED" {
-		t.Errorf("Initial state should be CLOSED, got %s", state)
+	// Upstream should always be healthy (no circuit breaker)
+	if !ps.isUpstreamHealthy(upstream) {
+		t.Error("Upstream should always be healthy (no circuit breaker)")
 	}
 
-	// 2. Trigger failures to open circuit
-	failureThreshold := 5
-	for i := 0; i < failureThreshold; i++ {
+	// Record many failures - should not affect upstream availability
+	for i := 0; i < 10; i++ {
 		ps.recordUpstreamFailure(upstream)
 	}
 
-	state = ps.getCircuitBreakerState(upstream)
-	if state != "OPEN" {
-		t.Errorf("State should be OPEN after failures, got %s", state)
+	// Should still be healthy and selectable despite failures
+	if !ps.isUpstreamHealthy(upstream) {
+		t.Error("Upstream should remain healthy despite failures (no circuit breaker)")
 	}
 
-	// 3. In OPEN state, requests should be rejected immediately
+	// Upstream should always be selected regardless of failure history
 	selected := ps.getNextUpstream()
-	if selected == upstream {
-		t.Error("Upstream should not be selected when circuit is OPEN")
+	if selected != upstream {
+		t.Errorf("Expected upstream to be selected despite failures, got %s", selected)
 	}
 
-	// 4. After timeout, should transition to HALF_OPEN
-	time.Sleep(1 * time.Second) // Circuit breaker timeout
-
-	// Next request should trigger HALF_OPEN state
-	ps.getNextUpstream()
-	state = ps.getCircuitBreakerState(upstream)
-	if state != "HALF_OPEN" {
-		t.Errorf("State should be HALF_OPEN after timeout, got %s", state)
+	// Verify failure count is tracked for monitoring
+	failureCount := ps.getUpstreamFailureCount(upstream)
+	if failureCount != 10 {
+		t.Errorf("Expected 10 failures tracked, got %d", failureCount)
 	}
-
-	// 5. Success in HALF_OPEN should close circuit
-	ps.recordUpstreamSuccess(upstream)
-	state = ps.getCircuitBreakerState(upstream)
-	if state != "CLOSED" {
-		t.Errorf("State should be CLOSED after success in HALF_OPEN, got %s", state)
-	}
-
-	// 6. Failure in HALF_OPEN should reopen circuit
-	// Reset to HALF_OPEN state and test failure
-	// ... (implementation-specific test logic)
 }
 
 // TestHealthMetricsExport tests health metrics for monitoring
-func TestHealthMetricsExport(t *testing.T) {
+func TestStatsMetricsExport(t *testing.T) {
 	t.Skip("Health metrics export not yet implemented - will be added during TDD")
 
 	config := &Config{
@@ -476,7 +462,7 @@ func TestHealthMetricsExport(t *testing.T) {
 	ps.recordUpstreamSuccess("http://127.0.0.1:9037")
 
 	// Export health metrics
-	metrics := ps.getHealthMetrics()
+	metrics := ps.getStatsMetrics()
 
 	// Verify metrics structure
 	expectedMetrics := map[string]interface{}{

@@ -2,7 +2,7 @@
 
 ## Overview
 
-NetDrift is a high-performance HTTP forward proxy server written in Go that implements load balancing across multiple upstream proxies. It serves as a middleware layer between clients and upstream proxy servers, providing authentication, statistics tracking, and intelligent request routing.
+NetDrift is a high-performance HTTP forward proxy server written in Go that implements load balancing across multiple upstream proxies. It serves as a middleware layer between clients and upstream proxy servers, providing authentication, comprehensive statistics tracking, and intelligent request routing.
 
 ## System Architecture
 
@@ -121,9 +121,9 @@ netdrift/
 ## Key Features
 
 ### 1. Load Balancing
-- **Algorithm**: Round-robin selection of upstream proxies
-- **Weight Support**: Configurable weights for upstream proxies (future enhancement)
-- **Health Tracking**: Per-upstream statistics and connection monitoring
+- **Algorithm**: Weighted round-robin selection of upstream proxies
+- **Weight Support**: Configurable weights for upstream proxies with intelligent distribution
+- **Statistics Tracking**: Per-upstream failure/success monitoring for observability
 
 ### 2. Authentication
 - **Basic Auth**: HTTP Basic authentication for client access
@@ -135,6 +135,8 @@ netdrift/
 - **Per-Upstream Tracking**: Individual statistics for each upstream proxy
 - **Time Windows**: Both lifetime and recent (15-minute) statistics
 - **Concurrency Monitoring**: Current active connections and peak concurrency
+- **Passive Monitoring**: Failure tracking without affecting upstream selection
+- **Active Health Checks**: Optional proactive health verification with configurable endpoints
 
 ### 4. Configuration Management
 - **JSON Configuration**: Human-readable configuration files
@@ -211,9 +213,9 @@ netdrift/
 ## Future Enhancements
 
 ### Load Balancing
-- **Weighted Round-Robin**: Full implementation of proxy weights
-- **Health Checks**: Active health monitoring of upstream proxies
-- **Failover**: Automatic failover to healthy upstream proxies
+- **Advanced Algorithms**: Least-connections, IP hash, and other balancing strategies
+- **Geographic Routing**: Location-based upstream selection
+- **Dynamic Weights**: Real-time weight adjustment based on performance metrics
 
 ### Performance
 - **Connection Pooling**: Reuse of upstream connections

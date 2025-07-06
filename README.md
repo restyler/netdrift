@@ -5,12 +5,12 @@ A high-performance HTTP CONNECT forward proxy server written in Go that implemen
 ## Features
 
 - **HTTP CONNECT Support**: Full support for HTTPS tunneling
-- **Advanced Load Balancing**: Weighted round-robin with health management and automatic failover
-- **Upstream Health Monitoring**: Real-time health tracking with configurable failure thresholds
+- **Advanced Load Balancing**: Weighted round-robin with comprehensive statistics tracking
+- **Upstream Statistics Monitoring**: Real-time failure/success tracking for monitoring and observability
 - **High Performance**: 4M+ operations/second with 227ns/op load balancing performance
 - **Authentication**: Basic authentication with user management and upstream proxy auth support
 - **Statistics & Monitoring**: Comprehensive metrics with time-window analytics and per-upstream tracking
-- **Fault Tolerance**: Automatic failover, circuit breaker patterns, and graceful degradation
+- **Observability**: Comprehensive failure tracking and monitoring without affecting upstream selection
 - **Configuration**: Flexible JSON-based configuration with live reload capability
 - **Thread Safety**: Full concurrent operation support with stress-tested reliability
 - **Process Management**: PID file support for production deployments
@@ -124,7 +124,66 @@ The proxy reads configuration from `configs/us.json`:
 }
 ```
 
-## Load Balancing & Health Management
+### Health Check Configuration
+
+Active health monitoring can be configured in the `health_check` section:
+
+```json
+{
+  "health_check": {
+    "enabled": true,
+    "interval_seconds": 300,
+    "timeout_seconds": 3,
+    "failure_threshold": 3,
+    "recovery_threshold": 1,
+    "endpoints": [
+      "https://api.ipify.org?format=json",
+      "https://httpbin.org/ip",
+      "https://icanhazip.com/"
+    ],
+    "endpoint_rotation": true,
+    "max_concurrency": 50,
+    "stagger_delay_ms": 100
+  },
+  "upstream_timeout": 5,
+  "upstream_proxies": [
+    {
+      "url": "http://127.0.0.1:3025",
+      "enabled": true,
+      "weight": 3,
+      "note": "Primary datacenter proxy"
+    }
+  ]
+}
+```
+
+#### Health Check Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enabled` | `false` | Enable active health monitoring |
+| `interval_seconds` | `300` | Check interval (5 minutes) |
+| `timeout_seconds` | `3` | Request timeout per check |
+| `failure_threshold` | `3` | Failures before marking unhealthy |
+| `recovery_threshold` | `1` | Successes to restore health |
+| `endpoints` | IP resolvers | External endpoints for health verification |
+| `endpoint_rotation` | `true` | Rotate through endpoints to avoid overload |
+| `max_concurrency` | `50` | Parallel health checks limit |
+| `stagger_delay_ms` | `100` | Delay between starting checks (load spreading) |
+
+#### Scalability Features
+
+- **Parallel Execution**: Health checks run concurrently with configurable limits
+- **Connection Pooling**: HTTP clients are reused for efficiency
+- **Batch Processing**: Results processed in batches to reduce lock contention
+- **Staggered Timing**: Checks spread over time to prevent load spikes
+- **Resource Management**: Automatic cleanup and timeout handling
+
+**Performance Example**: For 1000 upstream proxies:
+- **Sequential**: ~83 minutes (3s timeout × 3 endpoints × 1000 upstreams)
+- **Parallel (50 workers)**: ~4 minutes (efficient resource utilization)
+
+## Load Balancing & Statistics Monitoring
 
 ### Weight-Based Distribution
 
@@ -135,13 +194,23 @@ The proxy implements intelligent weighted round-robin load balancing:
 - **Weight 1**: Receives 17% of traffic (1/6 ratio)
 - **Weight 0**: Excluded from selection (maintenance mode)
 
-### Automatic Health Monitoring
+### Comprehensive Statistics System
 
-- **Failure Tracking**: Real-time monitoring of upstream proxy health
-- **Configurable Thresholds**: Default 3 failures trigger unhealthy status
-- **Automatic Failover**: Traffic automatically routes to healthy upstreams
-- **Instant Recovery**: First success after failure restores upstream to healthy pool
-- **Graceful Degradation**: When all upstreams fail, routes to least-failed option
+The proxy implements a dual-layer monitoring system for observability:
+
+#### Passive Statistics Tracking
+- **Failure Tracking**: Real-time monitoring of upstream proxy failures during normal traffic
+- **Success Tracking**: Success rate monitoring for performance analysis
+- **No Impact on Selection**: All enabled upstreams remain available regardless of failure history
+- **Comprehensive Metrics**: Detailed statistics for monitoring and alerting systems
+- **Tag-Based Grouping**: Statistics grouped by upstream tags for better organization
+
+#### Active Health Monitoring  
+- **Proactive Checks**: Independent health verification using IP-resolving endpoints
+- **Scalable Architecture**: Parallel execution with configurable concurrency limits
+- **Multiple Endpoints**: Fallback rotation across multiple IP resolution services
+- **Large Scale Support**: Efficiently handles 1000+ upstream proxies
+- **Resource Management**: Connection pooling and staggered execution to prevent overload
 
 ### Upstream Authentication Support
 
@@ -169,10 +238,21 @@ for i in {1..12}; do
 done
 ```
 
-### Health Status Monitoring
+### Statistics Monitoring
 ```bash
-# Check upstream health via stats endpoint
-curl -s http://127.0.0.1:3130/stats | jq '.total.upstream_metrics[] | {url, total_requests, failed_requests}'
+# Check upstream statistics via stats endpoint
+curl -s http://127.0.0.1:3130/stats | jq '.total.upstream_metrics[] | {url, total_requests, failed_requests, success_requests}'
+
+# Monitor active health check activity in logs
+curl -x http://proxyuser:Proxy234@127.0.0.1:3130 https://httpbin.org/ip
+# Look for logs like:
+# "Starting health checks for 10 upstreams with max concurrency 5"
+# "Health checks passed for 8 upstreams"
+# "Health check failed for http://proxy.example.com:8080"
+# Note: Active health checks don't affect upstream selection
+
+# View tag-grouped statistics
+curl -s http://127.0.0.1:3130/stats | jq '.total.tag_groups'
 ```
 
 ### With Custom Headers
@@ -314,10 +394,12 @@ Client Request
 │   │   - Round-Robin Algorithm       │   │
 │   └─────────────────────────────────┘   │
 │   ┌─────────────────────────────────┐   │
-│   │      Health Monitor             │   │
-│   │   - Failure Count Tracking      │   │
-│   │   - Automatic Failover          │   │
-│   │   - Recovery Detection          │   │
+│   │      Statistics Monitor         │   │
+│   │   - Passive Failure Tracking    │   │
+│   │   - Active Health Checks        │   │
+│   │   - Parallel Check Execution    │   │
+│   │   - No Upstream Disabling       │   │
+│   │   - Tag-Based Grouping          │   │
 │   └─────────────────────────────────┘   │
 │   ┌─────────────────────────────────┐   │
 │   │     Statistics System           │   │
@@ -374,7 +456,8 @@ make test-core
 # Run specific test categories
 go test -v ./cmd/proxy -run="TestUpstreamTagging"           # Tag functionality tests
 go test -v ./cmd/proxy -run="TestWeightedRoundRobin"        # Load balancing tests  
-go test -v ./cmd/proxy -run="TestUpstreamHealthTracking"    # Health management tests
+go test -v ./cmd/proxy -run="TestUpstreamStatsTrackingBasic"    # Statistics tracking tests
+go test -v ./cmd/proxy -run="TestHealthCheckScalability"    # Active health check scalability
 go test -v ./cmd/proxy -run="TestConfigurationWithTags"    # Configuration parsing tests
 ```
 

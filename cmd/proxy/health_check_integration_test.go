@@ -91,6 +91,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:           true,
 				IntervalSeconds:   2, // Fast for testing
@@ -114,7 +116,7 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		}
 
 		// Check health metrics
-		metrics := ps.getHealthMetrics()
+		metrics := ps.getStatsMetrics()
 		upstreams, ok := metrics["upstreams"].(map[string]interface{})
 		if !ok {
 			t.Fatal("Expected upstreams in health metrics")
@@ -172,6 +174,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:           true,
 				IntervalSeconds:   1, // Very fast for testing
@@ -256,6 +260,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:          true,
 				IntervalSeconds:  1,
@@ -280,7 +286,7 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		}
 
 		// Check that we had some successes despite the failing endpoint
-		successCount := ps.upstreamHealth[proxyServer.URL].SuccessCount
+		successCount := ps.upstreamStats[proxyServer.URL].SuccessCount
 		if successCount == 0 {
 			t.Error("Should have had some successful health checks")
 		}
@@ -325,6 +331,8 @@ func TestHealthCheckConfigurationIntegration(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled: false,
 			},
@@ -415,6 +423,8 @@ func TestHealthCheckStatsIntegration(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:           true,
 				IntervalSeconds:   1,
@@ -432,7 +442,7 @@ func TestHealthCheckStatsIntegration(t *testing.T) {
 		time.Sleep(6 * time.Second)
 
 		// Check health metrics
-		metrics := ps.getHealthMetrics()
+		metrics := ps.getStatsMetrics()
 		
 		upstreams, ok := metrics["upstreams"].(map[string]interface{})
 		if !ok {

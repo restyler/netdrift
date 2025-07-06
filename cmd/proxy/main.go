@@ -46,6 +46,8 @@ type Config struct {
 		RecoveryThreshold int     `json:"recovery_threshold"`
 		Endpoints        []string `json:"endpoints"`
 		EndpointRotation bool     `json:"endpoint_rotation"`
+		MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+		StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 	} `json:"health_check,omitempty"`
 }
 
@@ -62,15 +64,12 @@ type UpstreamStats struct {
 	LastRequest        time.Time `json:"last_request"`
 }
 
-type UpstreamHealth struct {
-	Tag               string    `json:"tag,omitempty"`
-	FailureCount      int64     `json:"failure_count"`
-	SuccessCount      int64     `json:"success_count"`
-	LastFailure       time.Time `json:"last_failure"`
-	LastSuccess       time.Time `json:"last_success"`
-	IsHealthy         bool      `json:"is_healthy"`
-	FailureThreshold  int       `json:"failure_threshold"`
-	RecoveryThreshold int       `json:"recovery_threshold"`
+type UpstreamStatsData struct {
+	Tag         string    `json:"tag,omitempty"`
+	FailureCount int64     `json:"failure_count"`
+	SuccessCount int64     `json:"success_count"`
+	LastFailure  time.Time `json:"last_failure"`
+	LastSuccess  time.Time `json:"last_success"`
 }
 
 type WeightedUpstream struct {
@@ -111,11 +110,13 @@ type HealthCheckResult struct {
 }
 
 type HealthChecker struct {
-	proxyServer   *ProxyServer
-	stopChan      chan struct{}
-	running       bool
-	mutex         sync.RWMutex
+	proxyServer          *ProxyServer
+	stopChan             chan struct{}
+	running              bool
+	mutex                sync.RWMutex
 	currentEndpointIndex int
+	httpClientPool       sync.Pool
+	semaphore            chan struct{}
 }
 
 type IPResponse struct {
@@ -133,8 +134,8 @@ type ProxyServer struct {
 	currentIdx        int
 	mutex             sync.RWMutex
 	reloadMutex       sync.Mutex
-	healthMutex       sync.RWMutex
-	upstreamHealth    map[string]*UpstreamHealth
+	statsMutex        sync.RWMutex
+	upstreamStats     map[string]*UpstreamStatsData
 	healthChecker     *HealthChecker
 	stats             struct {
 		StartTime       time.Time
@@ -157,7 +158,7 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	ps := &ProxyServer{
 		config:         config,
 		configPath:     configPath,
-		upstreamHealth: make(map[string]*UpstreamHealth),
+		upstreamStats:  make(map[string]*UpstreamStatsData),
 	}
 
 	// Get initial config file modification time
@@ -182,7 +183,7 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 	log.Printf("  - Total enabled upstreams: %d", len(ps.upstreams))
 	log.Printf("  - Total weight: %d", ps.totalWeight)
 	log.Printf("  - Load balancing: weighted round-robin")
-	log.Printf("  - Health monitoring: enabled (failure threshold: 3, recovery: auto)")
+	log.Printf("  - Health monitoring: stats only (passive health checks disabled)")
 	
 	// Log upstream configurations with tags
 	for _, weighted := range ps.weightedUpstreams {
@@ -224,8 +225,27 @@ func NewProxyServer(config *Config, configPath string) *ProxyServer {
 			config.HealthCheck.TimeoutSeconds = 10
 		}
 		
+		// Set default concurrency limits for scalability
+		if config.HealthCheck.MaxConcurrency == 0 {
+			// Default to reasonable concurrency based on upstream count
+			upstreamCount := len(ps.upstreams)
+			if upstreamCount > 100 {
+				config.HealthCheck.MaxConcurrency = 50 // High-scale deployment
+			} else if upstreamCount > 10 {
+				config.HealthCheck.MaxConcurrency = 20 // Medium-scale deployment
+			} else {
+				config.HealthCheck.MaxConcurrency = 10 // Small-scale deployment
+			}
+		}
+		
+		// Set default stagger delay for large deployments
+		if config.HealthCheck.StaggerDelay == 0 && len(ps.upstreams) > 50 {
+			config.HealthCheck.StaggerDelay = 10 // 10ms delay between health checks
+		}
+		
 		ps.startHealthChecker(interval)
-		log.Printf("  - Active health checks: enabled (interval: %v, endpoints: %d)", interval, len(config.HealthCheck.Endpoints))
+		log.Printf("  - Active health checks: enabled (interval: %v, endpoints: %d, max_concurrency: %d)", 
+			interval, len(config.HealthCheck.Endpoints), config.HealthCheck.MaxConcurrency)
 	} else {
 		log.Printf("  - Active health checks: disabled")
 	}
@@ -355,17 +375,14 @@ func (ps *ProxyServer) buildUpstreamLists() {
 			})
 			ps.totalWeight += weight
 
-			// Initialize upstream health if not exists
-			if _, exists := ps.upstreamHealth[upstream.URL]; !exists {
-				ps.upstreamHealth[upstream.URL] = &UpstreamHealth{
-					Tag:               upstream.Tag,
-					IsHealthy:         true,
-					FailureThreshold:  3, // Default failure threshold
-					RecoveryThreshold: 1, // Default recovery threshold
+			// Initialize upstream stats if not exists
+			if _, exists := ps.upstreamStats[upstream.URL]; !exists {
+				ps.upstreamStats[upstream.URL] = &UpstreamStatsData{
+					Tag: upstream.Tag,
 				}
 			} else {
 				// Update tag if it changed
-				ps.upstreamHealth[upstream.URL].Tag = upstream.Tag
+				ps.upstreamStats[upstream.URL].Tag = upstream.Tag
 			}
 
 			// Initialize stats if not exists
@@ -391,33 +408,13 @@ func (ps *ProxyServer) getNextUpstream() string {
 		return ""
 	}
 
-	// Get healthy upstreams only
-	healthyUpstreams := ps.getHealthyUpstreams()
-	if len(healthyUpstreams) == 0 {
-		// Fallback: return least failed upstream if all are unhealthy
-		return ps.getLeastFailedUpstream()
-	}
-
-	// Use weighted round-robin selection
-	return ps.selectWeightedUpstream(healthyUpstreams)
+	// Use weighted round-robin selection across all enabled upstreams
+	// Note: Passive health check management removed - all enabled upstreams are considered healthy
+	return ps.selectWeightedUpstream(ps.weightedUpstreams)
 }
 
-func (ps *ProxyServer) getHealthyUpstreams() []WeightedUpstream {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
-
-	var healthy []WeightedUpstream
-	for _, weighted := range ps.weightedUpstreams {
-		// Skip zero-weight upstreams
-		if weighted.Weight == 0 {
-			continue
-		}
-		if health, exists := ps.upstreamHealth[weighted.URL]; exists && health.IsHealthy {
-			healthy = append(healthy, weighted)
-		}
-	}
-	return healthy
-}
+// Note: getHealthyUpstreams removed - passive health check management disabled
+// All enabled upstreams are now considered healthy and available for selection
 
 func (ps *ProxyServer) selectWeightedUpstream(upstreams []WeightedUpstream) string {
 	if len(upstreams) == 0 {
@@ -436,7 +433,7 @@ func (ps *ProxyServer) selectWeightedUpstream(upstreams []WeightedUpstream) stri
 
 	if totalWeight == 0 {
 		// All weights are zero, use simple round-robin
-		// This should not happen since we filter zero weights in getHealthyUpstreams
+		// This should not happen since we filter zero weights in upstream selection
 		return upstreams[0].URL
 	}
 
@@ -461,156 +458,89 @@ func (ps *ProxyServer) selectWeightedUpstream(upstreams []WeightedUpstream) stri
 	return upstreams[0].URL
 }
 
-func (ps *ProxyServer) getLeastFailedUpstream() string {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
+// Note: getLeastFailedUpstream removed - passive health check management disabled
+// All upstreams are now considered equally available for selection
 
-	if len(ps.upstreams) == 0 {
-		return ""
-	}
-
-	leastFailed := ps.upstreams[0]
-	minFailures := int64(999999)
-
-	for _, upstream := range ps.upstreams {
-		if health, exists := ps.upstreamHealth[upstream]; exists {
-			if health.FailureCount < minFailures {
-				minFailures = health.FailureCount
-				leastFailed = upstream
-			}
-		}
-	}
-
-	return leastFailed
-}
-
-// Health management methods
+// Upstream statistics tracking methods
 func (ps *ProxyServer) recordUpstreamFailure(upstream string) {
-	ps.healthMutex.Lock()
-	defer ps.healthMutex.Unlock()
+	ps.statsMutex.Lock()
+	defer ps.statsMutex.Unlock()
 
-	health, exists := ps.upstreamHealth[upstream]
+	stats, exists := ps.upstreamStats[upstream]
 	if !exists {
-		health = &UpstreamHealth{
-			IsHealthy:         true,
-			FailureThreshold:  3,
-			RecoveryThreshold: 1,
-		}
-		ps.upstreamHealth[upstream] = health
+		stats = &UpstreamStatsData{}
+		ps.upstreamStats[upstream] = stats
 	}
 
-	health.FailureCount++
-	health.LastFailure = time.Now()
+	stats.FailureCount++
+	stats.LastFailure = time.Now()
 
-	// Check if upstream should be marked unhealthy
-	if health.FailureCount >= int64(health.FailureThreshold) {
-		health.IsHealthy = false
-		// Log unhealthy status with tag information
-		tagInfo := ""
-		if health.Tag != "" {
-			tagInfo = fmt.Sprintf(" [tag: %s]", health.Tag)
-		}
-		log.Printf("Upstream %s%s marked as unhealthy after %d failures", upstream, tagInfo, health.FailureCount)
-	}
+	// Note: Passive health check management removed - upstreams are never disabled based on failures
+	// Failure stats are still tracked for monitoring purposes
 }
 
 func (ps *ProxyServer) recordUpstreamSuccess(upstream string) {
-	ps.healthMutex.Lock()
-	defer ps.healthMutex.Unlock()
+	ps.statsMutex.Lock()
+	defer ps.statsMutex.Unlock()
 
-	health, exists := ps.upstreamHealth[upstream]
+	stats, exists := ps.upstreamStats[upstream]
 	if !exists {
-		health = &UpstreamHealth{
-			IsHealthy:         true,
-			FailureThreshold:  30,
-			RecoveryThreshold: 3,
-		}
-		ps.upstreamHealth[upstream] = health
+		stats = &UpstreamStatsData{}
+		ps.upstreamStats[upstream] = stats
 	}
 
-	health.SuccessCount++
-	health.LastSuccess = time.Now()
+	stats.SuccessCount++
+	stats.LastSuccess = time.Now()
 
-	// Check if upstream should recover
-	if !health.IsHealthy {
-		// Reset failure count on success to allow recovery
-		health.FailureCount = 0
-		health.IsHealthy = true
-		// Log recovery with tag information
-		tagInfo := ""
-		if health.Tag != "" {
-			tagInfo = fmt.Sprintf(" [tag: %s]", health.Tag)
-		}
-		log.Printf("Upstream %s%s recovered and marked as healthy", upstream, tagInfo)
-	}
+	// Note: Passive health check management removed - upstreams are always considered healthy
+	// Success stats are still tracked for monitoring purposes
 }
 
 func (ps *ProxyServer) isUpstreamHealthy(upstream string) bool {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
-
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists {
-		return true // Assume healthy if no health record
-	}
-
-	return health.IsHealthy
+	// Note: Passive health check management removed - upstreams are always considered healthy
+	return true
 }
 
 func (ps *ProxyServer) getUpstreamFailureCount(upstream string) int {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
+	ps.statsMutex.RLock()
+	defer ps.statsMutex.RUnlock()
 
-	health, exists := ps.upstreamHealth[upstream]
+	stats, exists := ps.upstreamStats[upstream]
 	if !exists {
 		return 0
 	}
 
-	return int(health.FailureCount)
+	return int(stats.FailureCount)
 }
 
-// Configuration methods for testing
-func (ps *ProxyServer) setFailureThreshold(upstream string, threshold int) {
-	ps.healthMutex.Lock()
-	defer ps.healthMutex.Unlock()
-
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists {
-		health = &UpstreamHealth{
-			IsHealthy:         true,
-			FailureThreshold:  threshold,
-			RecoveryThreshold: 1,
-		}
-		ps.upstreamHealth[upstream] = health
-	} else {
-		health.FailureThreshold = threshold
-	}
-}
-
-func (ps *ProxyServer) setRecoveryThreshold(upstream string, threshold int) {
-	ps.healthMutex.Lock()
-	defer ps.healthMutex.Unlock()
-
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists {
-		health = &UpstreamHealth{
-			IsHealthy:         true,
-			FailureThreshold:  3,
-			RecoveryThreshold: threshold,
-		}
-		ps.upstreamHealth[upstream] = health
-	} else {
-		health.RecoveryThreshold = threshold
-	}
-}
+// Note: Configuration methods for failure/recovery thresholds removed
+// These were part of passive health check management which is now disabled
 
 // Health checker implementation
 func NewHealthChecker(proxyServer *ProxyServer) *HealthChecker {
-	return &HealthChecker{
+	// Determine concurrency limit
+	maxConcurrency := 50 // Default for large deployments
+	if proxyServer.config.HealthCheck.MaxConcurrency > 0 {
+		maxConcurrency = proxyServer.config.HealthCheck.MaxConcurrency
+	}
+	
+	hc := &HealthChecker{
 		proxyServer: proxyServer,
 		stopChan:    make(chan struct{}),
 		running:     false,
+		semaphore:   make(chan struct{}, maxConcurrency),
 	}
+	
+	// Initialize HTTP client pool
+	hc.httpClientPool = sync.Pool{
+		New: func() interface{} {
+			return &http.Client{
+				Timeout: 30 * time.Second, // Generous timeout for pool reuse
+			}
+		},
+	}
+	
+	return hc
 }
 
 func (ps *ProxyServer) startHealthChecker(interval time.Duration) {
@@ -686,11 +616,55 @@ func (hc *HealthChecker) performHealthChecks() {
 		return
 	}
 	
-	// Check each upstream proxy
-	for _, upstream := range upstreams {
-		result := hc.checkUpstreamHealth(upstream, config)
-		hc.processHealthCheckResult(result)
+	numUpstreams := len(upstreams)
+	if numUpstreams == 0 {
+		return
 	}
+	
+	log.Printf("Starting health checks for %d upstreams with max concurrency %d", numUpstreams, cap(hc.semaphore))
+	
+	// Use buffered channel to collect results
+	results := make(chan HealthCheckResult, numUpstreams)
+	var wg sync.WaitGroup
+	
+	// Launch parallel health checks with concurrency control
+	for i, upstream := range upstreams {
+		wg.Add(1)
+		go func(upstream string, index int) {
+			defer wg.Done()
+			
+			// Apply staggered delay to spread load
+			if config.HealthCheck.StaggerDelay > 0 && index > 0 {
+				delay := time.Duration(index*config.HealthCheck.StaggerDelay) * time.Millisecond
+				time.Sleep(delay)
+			}
+			
+			// Acquire semaphore for concurrency control
+			hc.semaphore <- struct{}{}
+			defer func() { <-hc.semaphore }()
+			
+			// Perform health check
+			result := hc.checkUpstreamHealth(upstream, config)
+			results <- result
+		}(upstream, i)
+	}
+	
+	// Close results channel when all goroutines complete
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	
+	// Collect and batch process results
+	var collectedResults []HealthCheckResult
+	for result := range results {
+		collectedResults = append(collectedResults, result)
+	}
+	
+	// Process results in batch to reduce lock contention
+	hc.processBatchHealthCheckResults(collectedResults)
+	
+	log.Printf("Completed health checks for %d upstreams", numUpstreams)
 }
 
 func (hc *HealthChecker) checkUpstreamHealth(upstream string, config *Config) HealthCheckResult {
@@ -706,18 +680,19 @@ func (hc *HealthChecker) checkUpstreamHealth(upstream string, config *Config) He
 		}
 	}
 	
-	// Create HTTP client with proxy
-	client, err := hc.createProxyClient(upstream, config)
-	if err != nil {
+	// Get HTTP client from pool and configure for this proxy
+	client := hc.getPooledClient(upstream, config)
+	if client == nil {
 		return HealthCheckResult{
 			Upstream:  upstream,
 			Success:   false,
-			Error:     fmt.Errorf("failed to create proxy client: %v", err),
+			Error:     fmt.Errorf("failed to create proxy client"),
 			Endpoint:  endpoint,
 			Timestamp: startTime,
 			Latency:   time.Since(startTime),
 		}
 	}
+	defer hc.returnPooledClient(client)
 	
 	// Make request through proxy
 	resp, err := client.Get(endpoint)
@@ -812,6 +787,58 @@ func (hc *HealthChecker) getNextEndpoint(config *Config) string {
 	return config.HealthCheck.Endpoints[hc.currentEndpointIndex]
 }
 
+func (hc *HealthChecker) getPooledClient(proxyURL string, config *Config) *http.Client {
+	// Get client from pool
+	clientInterface := hc.httpClientPool.Get()
+	client, ok := clientInterface.(*http.Client)
+	if !ok {
+		return nil
+	}
+	
+	// Configure client for this specific proxy
+	parsedProxy, err := url.Parse(proxyURL)
+	if err != nil {
+		hc.httpClientPool.Put(client)
+		return nil
+	}
+	
+	timeout := 10 * time.Second
+	if config.HealthCheck.TimeoutSeconds > 0 {
+		timeout = time.Duration(config.HealthCheck.TimeoutSeconds) * time.Second
+	}
+	
+	dialer := &net.Dialer{
+		Timeout: timeout,
+	}
+	
+	// Create new transport for this request (transport is not thread-safe for reuse)
+	transport := &http.Transport{
+		Proxy:                 http.ProxyURL(parsedProxy),
+		DialContext:           dialer.DialContext,
+		ResponseHeaderTimeout: timeout,
+		MaxIdleConns:          1,
+		MaxIdleConnsPerHost:   1,
+	}
+	
+	client.Transport = transport
+	client.Timeout = timeout
+	
+	return client
+}
+
+func (hc *HealthChecker) returnPooledClient(client *http.Client) {
+	if client != nil {
+		// Close any existing transport to clean up connections
+		if transport, ok := client.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+		// Reset client for reuse
+		client.Transport = nil
+		hc.httpClientPool.Put(client)
+	}
+}
+
+// Keep the old method for backward compatibility in tests
 func (hc *HealthChecker) createProxyClient(proxyURL string, config *Config) (*http.Client, error) {
 	parsedProxy, err := url.Parse(proxyURL)
 	if err != nil {
@@ -851,66 +878,98 @@ func (hc *HealthChecker) processHealthCheckResult(result HealthCheckResult) {
 	}
 }
 
-func (ps *ProxyServer) getCircuitBreakerState(upstream string) string {
-	// TODO: Implement circuit breaker states
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
-
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists || health.IsHealthy {
-		return "CLOSED"
+func (hc *HealthChecker) processBatchHealthCheckResults(results []HealthCheckResult) {
+	if len(results) == 0 {
+		return
 	}
-	return "OPEN"
+	
+	ps := hc.proxyServer
+	
+	// Separate results by success/failure to minimize lock time
+	var successResults []HealthCheckResult
+	var failureResults []HealthCheckResult
+	
+	for _, result := range results {
+		if result.Success {
+			successResults = append(successResults, result)
+		} else {
+			failureResults = append(failureResults, result)
+		}
+	}
+	
+	// Process successes in batch
+	if len(successResults) > 0 {
+		for _, result := range successResults {
+			ps.recordUpstreamSuccess(result.Upstream)
+		}
+		log.Printf("Health checks passed for %d upstreams", len(successResults))
+	}
+	
+	// Process failures in batch
+	if len(failureResults) > 0 {
+		for _, result := range failureResults {
+			ps.recordUpstreamFailure(result.Upstream)
+		}
+		log.Printf("Health checks failed for %d upstreams", len(failureResults))
+		
+		// Log first few failures for debugging
+		logCount := len(failureResults)
+		if logCount > 5 {
+			logCount = 5
+		}
+		for i := 0; i < logCount; i++ {
+			result := failureResults[i]
+			log.Printf("Health check failed for %s via %s: %v (latency: %v)", 
+				result.Upstream, result.Endpoint, result.Error, result.Latency)
+		}
+		if len(failureResults) > 5 {
+			log.Printf("... and %d more failures", len(failureResults)-5)
+		}
+	}
 }
 
-func (ps *ProxyServer) getHealthMetrics() map[string]interface{} {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
+// Note: Circuit breaker functionality removed - not applicable without passive health checks
+// All upstreams remain available regardless of failure history
+
+func (ps *ProxyServer) getStatsMetrics() map[string]interface{} {
+	ps.statsMutex.RLock()
+	defer ps.statsMutex.RUnlock()
 
 	metrics := make(map[string]interface{})
 	upstreams := make(map[string]interface{})
 	tagGroups := make(map[string]interface{})
 
-	// Per-upstream health metrics
-	for url, health := range ps.upstreamHealth {
+	// Per-upstream stats metrics
+	for url, stats := range ps.upstreamStats {
 		upstreams[url] = map[string]interface{}{
-			"healthy":       health.IsHealthy,
-			"failure_count": health.FailureCount,
-			"success_count": health.SuccessCount,
-			"tag":           health.Tag,
+			"failure_count": stats.FailureCount,
+			"success_count": stats.SuccessCount,
+			"tag":           stats.Tag,
 		}
 	}
 
-	// Group health metrics by tag
-	tagHealthStats := make(map[string]map[string]interface{})
-	for _, health := range ps.upstreamHealth {
-		if health.Tag != "" {
-			if _, exists := tagHealthStats[health.Tag]; !exists {
-				tagHealthStats[health.Tag] = map[string]interface{}{
-					"tag":                 health.Tag,
-					"total_upstreams":     0,
-					"healthy_upstreams":   0,
-					"unhealthy_upstreams": 0,
-					"total_failures":      int64(0),
-					"total_successes":     int64(0),
+	// Group stats metrics by tag
+	tagStatsData := make(map[string]map[string]interface{})
+	for _, stats := range ps.upstreamStats {
+		if stats.Tag != "" {
+			if _, exists := tagStatsData[stats.Tag]; !exists {
+				tagStatsData[stats.Tag] = map[string]interface{}{
+					"tag":             stats.Tag,
+					"total_upstreams": 0,
+					"total_failures":  int64(0),
+					"total_successes": int64(0),
 				}
 			}
 
-			tagStats := tagHealthStats[health.Tag]
-			tagStats["total_upstreams"] = tagStats["total_upstreams"].(int) + 1
-			tagStats["total_failures"] = tagStats["total_failures"].(int64) + health.FailureCount
-			tagStats["total_successes"] = tagStats["total_successes"].(int64) + health.SuccessCount
-
-			if health.IsHealthy {
-				tagStats["healthy_upstreams"] = tagStats["healthy_upstreams"].(int) + 1
-			} else {
-				tagStats["unhealthy_upstreams"] = tagStats["unhealthy_upstreams"].(int) + 1
-			}
+			tagData := tagStatsData[stats.Tag]
+			tagData["total_upstreams"] = tagData["total_upstreams"].(int) + 1
+			tagData["total_failures"] = tagData["total_failures"].(int64) + stats.FailureCount
+			tagData["total_successes"] = tagData["total_successes"].(int64) + stats.SuccessCount
 		}
 	}
 
 	// Convert to final format
-	for tag, stats := range tagHealthStats {
+	for tag, stats := range tagStatsData {
 		tagGroups[tag] = stats
 	}
 
@@ -922,34 +981,9 @@ func (ps *ProxyServer) getHealthMetrics() map[string]interface{} {
 }
 
 // Additional stub methods for advanced failover features
-func (ps *ProxyServer) getFailureThreshold(upstream string) int {
-	ps.healthMutex.RLock()
-	defer ps.healthMutex.RUnlock()
+// Note: getFailureThreshold removed - part of passive health check management
 
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists {
-		return 3 // Default threshold
-	}
-	return health.FailureThreshold
-}
-
-func (ps *ProxyServer) adjustFailureThreshold(upstream string, successRate float64) {
-	// TODO: Implement dynamic threshold adjustment based on success rate
-	ps.healthMutex.Lock()
-	defer ps.healthMutex.Unlock()
-
-	health, exists := ps.upstreamHealth[upstream]
-	if !exists {
-		return
-	}
-
-	// Simple adjustment logic: lower success rate = stricter threshold
-	if successRate < 0.5 {
-		health.FailureThreshold = 2 // Stricter
-	} else if successRate > 0.8 {
-		health.FailureThreshold = 5 // More tolerant
-	}
-}
+// Note: adjustFailureThreshold removed - part of passive health check management
 
 func (ps *ProxyServer) enableExponentialBackoff(upstream string, enabled bool) {
 	// TODO: Implement exponential backoff for retry timing
@@ -1319,13 +1353,13 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 	}
 	ps.mutex.RUnlock()
 
-	// Get health snapshot
-	ps.healthMutex.RLock()
-	upstreamHealthCopy := make(map[string]UpstreamHealth)
-	for url, health := range ps.upstreamHealth {
-		upstreamHealthCopy[url] = *health
+	// Get stats snapshot
+	ps.statsMutex.RLock()
+	upstreamStatsDataCopy := make(map[string]UpstreamStatsData)
+	for url, stats := range ps.upstreamStats {
+		upstreamStatsDataCopy[url] = *stats
 	}
-	ps.healthMutex.RUnlock()
+	ps.statsMutex.RUnlock()
 
 	// Process data without holding any locks
 	upstreamStatsMap := make(map[string]*UpstreamStats)
@@ -1456,19 +1490,11 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 			tagGroup.AvgLatency = float64(tagLatencyMap[tag]) / float64(tagGroup.SuccessRequests)
 		}
 
-		// Count healthy/unhealthy upstreams for this tag
+		// Count upstreams for this tag (all are considered healthy with passive health checks disabled)
 		for _, weighted := range weightedUpstreamsCopy {
 			if weighted.Tag == tag {
 				tagGroup.UpstreamCount++
-				if health, exists := upstreamHealthCopy[weighted.URL]; exists {
-					if health.IsHealthy {
-						tagGroup.HealthyCount++
-					} else {
-						tagGroup.UnhealthyCount++
-					}
-				} else {
-					tagGroup.HealthyCount++ // Assume healthy if no health record
-				}
+				tagGroup.HealthyCount++ // All upstreams are considered healthy
 			}
 		}
 

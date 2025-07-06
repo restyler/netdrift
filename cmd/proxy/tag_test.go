@@ -61,8 +61,8 @@ func TestUpstreamTagging(t *testing.T) {
 			t.Errorf("Expected 1 untagged upstream, got %d", untaggedCount)
 		}
 
-		// Check that tags are stored in health tracking
-		for url, health := range ps.upstreamHealth {
+		// Check that tags are stored in stats tracking
+		for url, stats := range ps.upstreamStats {
 			expectedTag := ""
 			for _, weighted := range ps.weightedUpstreams {
 				if weighted.URL == url {
@@ -70,8 +70,8 @@ func TestUpstreamTagging(t *testing.T) {
 					break
 				}
 			}
-			if health.Tag != expectedTag {
-				t.Errorf("Health tracking tag mismatch for %s: expected %q, got %q", url, expectedTag, health.Tag)
+			if stats.Tag != expectedTag {
+				t.Errorf("Stats tracking tag mismatch for %s: expected %q, got %q", url, expectedTag, stats.Tag)
 			}
 		}
 
@@ -115,12 +115,12 @@ func TestUpstreamTagging(t *testing.T) {
 		ps.recordUpstreamSuccess("http://127.0.0.1:9106")
 
 		// Check health metrics with tag grouping
-		healthMetrics := ps.getHealthMetrics()
+		statsMetrics := ps.getStatsMetrics()
 
-		// Verify individual upstream health includes tags
-		upstreams, ok := healthMetrics["upstreams"].(map[string]interface{})
+		// Verify individual upstream stats includes tags
+		upstreams, ok := statsMetrics["upstreams"].(map[string]interface{})
 		if !ok {
-			t.Fatal("Expected upstreams in health metrics")
+			t.Fatal("Expected upstreams in stats metrics")
 		}
 
 		upstream104, ok := upstreams["http://127.0.0.1:9104"].(map[string]interface{})
@@ -130,14 +130,18 @@ func TestUpstreamTagging(t *testing.T) {
 		if upstream104["tag"] != "provider-a" {
 			t.Errorf("Expected tag 'provider-a', got %v", upstream104["tag"])
 		}
-		if upstream104["healthy"] != false {
-			t.Errorf("Expected upstream 9104 to be unhealthy")
+		// Note: 'healthy' field removed - passive health checks disabled
+		// All upstreams are now always considered healthy
+		
+		// Verify failure stats are tracked
+		if upstream104["failure_count"] != int64(3) {
+			t.Errorf("Expected 3 failures for upstream 9104, got %v", upstream104["failure_count"])
 		}
 
 		// Verify tag groups are present
-		tagGroups, ok := healthMetrics["tag_groups"].(map[string]interface{})
+		tagGroups, ok := statsMetrics["tag_groups"].(map[string]interface{})
 		if !ok {
-			t.Fatal("Expected tag_groups in health metrics")
+			t.Fatal("Expected tag_groups in stats metrics")
 		}
 
 		providerA, ok := tagGroups["provider-a"].(map[string]interface{})
@@ -147,11 +151,9 @@ func TestUpstreamTagging(t *testing.T) {
 		if providerA["total_upstreams"] != 2 {
 			t.Errorf("Expected 2 upstreams for provider-a, got %v", providerA["total_upstreams"])
 		}
-		if providerA["healthy_upstreams"] != 1 {
-			t.Errorf("Expected 1 healthy upstream for provider-a, got %v", providerA["healthy_upstreams"])
-		}
-		if providerA["unhealthy_upstreams"] != 1 {
-			t.Errorf("Expected 1 unhealthy upstream for provider-a, got %v", providerA["unhealthy_upstreams"])
+		// Note: healthy/unhealthy counts removed - all upstreams are always considered healthy
+		if providerA["total_failures"] != int64(3) {
+			t.Errorf("Expected 3 total failures for provider-a, got %v", providerA["total_failures"])
 		}
 	})
 
@@ -413,9 +415,9 @@ func TestTaggedLogging(t *testing.T) {
 			}
 		}
 
-		for _, health := range ps.upstreamHealth {
-			if health.Tag == "" {
-				t.Error("Expected tag to be available in health tracking for logging")
+		for _, stats := range ps.upstreamStats {
+			if stats.Tag == "" {
+				t.Error("Expected tag to be available in stats tracking for logging")
 			}
 		}
 

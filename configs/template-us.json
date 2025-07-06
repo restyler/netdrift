@@ -38,6 +38,8 @@
         "https://api.ipify.org?format=json",
         "https://httpbin.org/ip"
       ],
-      "endpoint_rotation": true
+      "endpoint_rotation": true,
+      "max_concurrency": 50,
+      "stagger_delay_ms": 10
     }
   } 

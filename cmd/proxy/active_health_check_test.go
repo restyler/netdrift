@@ -119,6 +119,8 @@ func TestHealthCheckerBasicFunctionality(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:          true,
 				IntervalSeconds:  1, // 1 second for fast testing
@@ -158,6 +160,8 @@ func TestHealthCheckerBasicFunctionality(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:         true,
 				IntervalSeconds: 1,
@@ -196,6 +200,8 @@ func TestEndpointRotation(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:          true,
 				EndpointRotation: true,
@@ -240,6 +246,8 @@ func TestEndpointRotation(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				EndpointRotation: false,
 				Endpoints:        []string{server1.URL, server2.URL},
@@ -277,6 +285,8 @@ func TestHealthCheckResults(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				TimeoutSeconds: 5,
 				Endpoints:      []string{ipServer.URL},
@@ -317,6 +327,8 @@ func TestHealthCheckResults(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				TimeoutSeconds: 5,
 				Endpoints:      []string{ipServer.URL},
@@ -358,6 +370,8 @@ func TestHealthCheckResults(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				TimeoutSeconds: 5,
 				Endpoints:      []string{invalidServer.URL},
@@ -395,6 +409,8 @@ func TestHealthCheckResults(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				TimeoutSeconds: 5,
 				Endpoints:      []string{noIPServer.URL},
@@ -439,6 +455,8 @@ func TestHealthCheckIntegration(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:          true,
 				FailureThreshold: 2,
@@ -500,6 +518,8 @@ func TestHealthCheckConfiguration(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled: true,
 				// Leave other fields at zero to test defaults
@@ -537,6 +557,8 @@ func TestHealthCheckConfiguration(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled: false,
 			},
@@ -570,6 +592,8 @@ func TestHealthCheckTimeout(t *testing.T) {
 				RecoveryThreshold int     `json:"recovery_threshold"`
 				Endpoints        []string `json:"endpoints"`
 				EndpointRotation bool     `json:"endpoint_rotation"`
+				MaxConcurrency   int      `json:"max_concurrency,omitempty"`
+				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				TimeoutSeconds: 1, // 1 second timeout
 				Endpoints:      []string{slowServer.URL},
