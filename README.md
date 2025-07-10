@@ -1,23 +1,37 @@
 # Netdrift - Forward Proxy with Load Balancing
 
-A high-performance HTTP CONNECT forward proxy server written in Go that implements advanced weighted load balancing across multiple upstream proxies with comprehensive statistics tracking and optional active health monitoring. Features detailed performance metrics, authentication, upstream tagging, and production-ready monitoring without upstream disruption.
+A simple, pragmatic HTTP CONNECT forward proxy server written in Go that implements weighted load balancing across multiple upstream proxies with statistics tracking and optional health monitoring.
+
+## Why Netdrift?
+
+Existing proxy solutions have limitations for forward proxy use cases:
+
+- **Squid**: Designed for caching/reverse proxying, complex for simple forward proxy scenarios
+- **HAProxy**: Excellent for load balancing but not specialized for HTTP CONNECT tunneling
+- **3proxy**: Functional but uses esoteric configuration syntax that's hard to maintain
+
+Netdrift focuses specifically on forward proxy load balancing with:
+- Simple JSON configuration
+- Built-in statistics without external dependencies
+- Designed for HTTP CONNECT tunneling from the ground up
+- Straightforward deployment and monitoring
 
 ## Features
 
-- **HTTP CONNECT Support**: Full support for HTTPS tunneling
-- **Advanced Load Balancing**: Weighted round-robin with real-time statistics tracking
-- **Statistics-Only Health Model**: Comprehensive failure/success tracking without affecting upstream selection
-- **High Performance**: 159,817 operations/second with stress-tested concurrent handling
-- **Authentication**: Basic authentication with user management and upstream proxy auth support
+- **HTTP CONNECT Support**: HTTPS tunneling
+- **Load Balancing**: Weighted round-robin with statistics tracking
+- **Statistics-Only Health Model**: Failure/success tracking without affecting upstream selection
+- **Performance**: 159,817 operations/second with concurrent handling
+- **Authentication**: Basic authentication with user management and upstream proxy auth
 - **Upstream Tagging**: Group and monitor upstream proxies by provider, region, or custom tags
-- **Statistics & Monitoring**: Detailed metrics with health indicators, time-window analytics, and tag-grouped statistics
-- **Optional Active Health Checks**: Configurable health monitoring with endpoint rotation and concurrency control
-- **Configuration**: Flexible JSON-based configuration with comprehensive upstream management
-- **Thread Safety**: Full concurrent operation support with race condition testing
-- **Process Management**: PID file support for production deployments
-- **Testing Framework**: 89% test success rate with comprehensive core functionality coverage
-- **Docker Ready**: Full Docker and Docker Compose support
-- **Production Ready**: Built-in logging, error handling, and graceful shutdown
+- **Statistics & Monitoring**: Metrics with health indicators, time-window analytics, and tag-grouped statistics
+- **Optional Health Checks**: Health monitoring with endpoint rotation
+- **Configuration**: JSON-based configuration with upstream management
+- **Thread Safety**: Concurrent operation support with race condition testing
+- **Process Management**: PID file support
+- **Testing Framework**: 89% test success rate with core functionality coverage
+- **Docker Ready**: Docker and Docker Compose support
+- **Production Ready**: Logging, error handling, and graceful shutdown
 
 ## Quick Start
 
@@ -63,6 +77,21 @@ docker compose -f docker-compose.test.yml down
 ```
 
 ## Configuration
+
+### Configuration Reloading
+
+The proxy monitors its configuration file for changes and automatically reloads supported settings:
+
+#### Settings Reloaded Live (No Restart Required)
+- **Authentication**: Enable/disable authentication, user credentials
+- **Upstream Proxies**: URLs, weights, enabled status, tags, authentication
+- **Health Checks**: All health check settings and endpoints
+
+#### Settings Requiring Restart
+- **Server Settings**: `listen_address`, `stats_endpoint`, `server_name`
+- **Network Configuration**: Port bindings and server-level parameters
+
+**Reload Mechanism**: File modification time checked every 1 minute. Changes are applied atomically with proper error handling.
 
 ### Command Line Options
 
@@ -183,6 +212,31 @@ Active health monitoring can be configured in the `health_check` section:
 **Performance Example**: For 1000 upstream proxies:
 - **Sequential**: ~83 minutes (3s timeout × 3 endpoints × 1000 upstreams)
 - **Parallel (50 workers)**: ~4 minutes (efficient resource utilization)
+
+### Complete Configuration Reference
+
+| Section | Option | Type | Default | Description |
+|---------|--------|------|---------|-------------|
+| **server** | `name` | string | `"Netdrift Proxy"` | Server name for logging |
+| | `listen_address` | string | `"127.0.0.1:3130"` | Address and port to listen on |
+| | `stats_endpoint` | string | `"/stats"` | HTTP endpoint for statistics |
+| **authentication** | `enabled` | boolean | `false` | Enable/disable authentication |
+| | `users[].username` | string | - | Username for basic auth |
+| | `users[].password` | string | - | Password for basic auth |
+| **upstream_proxies** | `url` | string | - | Upstream proxy URL (with optional auth) |
+| | `enabled` | boolean | `true` | Enable/disable this upstream |
+| | `weight` | integer | `1` | Weight for load balancing (0=disabled) |
+| | `tag` | string | - | Optional tag for grouping/monitoring |
+| **health_check** | `enabled` | boolean | `false` | Enable active health monitoring |
+| | `interval_seconds` | integer | `300` | Health check interval (5 minutes) |
+| | `timeout_seconds` | integer | `3` | Request timeout per check |
+| | `failure_threshold` | integer | `3` | Failures before marking unhealthy |
+| | `recovery_threshold` | integer | `1` | Successes to restore health |
+| | `endpoints` | array | IP resolvers | External endpoints for health verification |
+| | `endpoint_rotation` | boolean | `true` | Rotate through endpoints |
+| | `max_concurrency` | integer | `50` | Parallel health checks limit |
+| | `stagger_delay_ms` | integer | `100` | Delay between starting checks |
+| **global** | `upstream_timeout` | integer | `5` | Timeout for upstream connections (seconds) |
 
 ## Load Balancing & Statistics Monitoring
 
