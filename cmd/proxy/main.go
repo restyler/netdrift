@@ -55,6 +55,7 @@ type UpstreamStats struct {
 	URL                string    `json:"url"`
 	Tag                string    `json:"tag,omitempty"`
 	Index              int       `json:"index"`
+	Healthy            bool      `json:"healthy"`
 	TotalRequests      int64     `json:"total_reqs"`
 	SuccessRequests    int64     `json:"success_reqs"`
 	FailedRequests     int64     `json:"failed_reqs"`
@@ -1479,6 +1480,8 @@ func (ps *ProxyServer) getTimeWindowStats(window time.Duration) TimeWindowStats 
 				us.Tag = metric.Tag
 				us.LastRequest = metric.LastRequest
 			}
+			// Set health status (always true with passive health checks disabled)
+			us.Healthy = ps.isUpstreamHealthy(upstream)
 			stats.UpstreamMetrics = append(stats.UpstreamMetrics, *us)
 		}
 	}
