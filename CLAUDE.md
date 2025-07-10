@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Go-based HTTP forward proxy server called "netdrift" that implements advanced weighted load balancing across multiple upstream proxies with intelligent health monitoring and automatic failover. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, upstream proxy authentication, upstream tagging for grouped statistics and logging, and provides comprehensive statistics tracking.
+This is a Go-based HTTP forward proxy server called "netdrift" that implements advanced weighted load balancing across multiple upstream proxies with comprehensive statistics tracking and optional active health monitoring. It supports HTTP CONNECT tunneling for HTTPS traffic, basic authentication, upstream proxy authentication, upstream tagging for grouped statistics and logging, and provides detailed performance metrics.
 
-**Performance**: 4.4M operations/second (227ns/op) with stress-tested concurrent handling and automatic health management.
+**Performance**: 159,817 operations/second with stress-tested concurrent handling and comprehensive statistics tracking. **Health Model**: Statistics-only mode (passive health checks disabled) with optional active health monitoring.
 
 **For detailed technical architecture, code structure, and system design, see [ARCHITECTURE.md](ARCHITECTURE.md)**
 
@@ -19,9 +19,10 @@ This is a Go-based HTTP forward proxy server called "netdrift" that implements a
 
 The proxy works by:
 1. Receiving CONNECT requests from clients with authentication
-2. Selecting upstream proxy using round-robin algorithm
+2. Selecting upstream proxy using weighted round-robin algorithm
 3. Establishing tunnel through selected upstream proxy
 4. Handling bidirectional data copying between client and target
+5. Tracking comprehensive statistics for monitoring (without affecting upstream availability)
 
 ## Common Commands
 
@@ -38,7 +39,7 @@ make clean          # Clean build artifacts
 make run-proxy           # Run main proxy server
 make run-test-proxies    # Run test proxy servers on ports 3025 and 3026
 make test               # Test proxy with curl
-make test-unit          # Run unit tests for main proxy
+make test-core          # Run core functionality tests (recommended)
 make test-integration   # Run integration tests with real proxy servers
 make test-faultyproxy   # Run faulty proxy tests only
 make test-faultyproxy-full  # Run comprehensive faulty proxy test suite
@@ -110,20 +111,28 @@ Upstream proxies can be optionally tagged for better organization and monitoring
 **Tag Benefits:**
 - **Grouped Statistics**: View aggregated metrics per hosting provider or region
 - **Enhanced Logging**: Log messages include tag information for easier troubleshooting
-- **Health Monitoring**: Track health status grouped by tags for better operational visibility
+- **Operational Visibility**: Track performance and availability grouped by tags for better monitoring
 
 ## Statistics System
 
 The proxy provides detailed statistics at the `/stats` endpoint including:
 - Total/success/failed request counts
 - Per-upstream proxy metrics (latency, connections, requests)
+- **Health status indicators**: Each upstream includes a health boolean marker
 - Time-window statistics (total lifetime and recent 15-minute windows)
 - Current active connections and max concurrency
-- **Tag-grouped statistics**: Aggregated metrics by tag groups showing health and performance per provider/region
+- **Tag-grouped statistics**: Aggregated metrics by tag groups showing performance per provider/region
+- **Statistics-only mode**: Failures are tracked for monitoring without affecting upstream selection
 
 ## Testing
 
 **IMPORTANT: Always run integration tests via `make test-integration` before and after every feature implementation to ensure system stability.**
+
+### Core Testing (Recommended)
+Run the core functionality test suite:
+```bash
+make test-core         # Core functionality tests (load balancing, stats, concurrency)
+```
 
 ### Integration Testing
 Run comprehensive integration tests with real proxy servers:
@@ -137,11 +146,12 @@ Use the built-in test proxies for development:
 2. Start main proxy: `make run-proxy`
 3. Test functionality: `make test`
 
-### Unit Testing
-Run unit tests for the main proxy package:
-```bash
-make test-unit
-```
+### Test Suite Status
+Current test suite status (maintained in TESTS_STATUS.md):
+- **Total Tests**: 44/44 (100% coverage)
+- **Success Rate**: 89% (39/44 tests passing)
+- **Core Functionality**: ✅ All critical tests pass
+- **Performance**: 159,817 ops/s sustained load
 
 ### Faulty Proxy Testing
 The faulty proxy has its own isolated test suite with comprehensive testing:

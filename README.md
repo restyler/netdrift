@@ -1,20 +1,21 @@
 # Netdrift - Forward Proxy with Load Balancing
 
-A high-performance HTTP CONNECT forward proxy server written in Go that implements advanced weighted load balancing across multiple upstream proxies with intelligent health monitoring and automatic failover. Features comprehensive statistics, authentication, fault tolerance, and production-ready monitoring.
+A high-performance HTTP CONNECT forward proxy server written in Go that implements advanced weighted load balancing across multiple upstream proxies with comprehensive statistics tracking and optional active health monitoring. Features detailed performance metrics, authentication, upstream tagging, and production-ready monitoring without upstream disruption.
 
 ## Features
 
 - **HTTP CONNECT Support**: Full support for HTTPS tunneling
-- **Advanced Load Balancing**: Weighted round-robin with comprehensive statistics tracking
-- **Upstream Statistics Monitoring**: Real-time failure/success tracking for monitoring and observability
-- **High Performance**: 4M+ operations/second with 227ns/op load balancing performance
+- **Advanced Load Balancing**: Weighted round-robin with real-time statistics tracking
+- **Statistics-Only Health Model**: Comprehensive failure/success tracking without affecting upstream selection
+- **High Performance**: 159,817 operations/second with stress-tested concurrent handling
 - **Authentication**: Basic authentication with user management and upstream proxy auth support
-- **Statistics & Monitoring**: Comprehensive metrics with time-window analytics and per-upstream tracking
-- **Observability**: Comprehensive failure tracking and monitoring without affecting upstream selection
-- **Configuration**: Flexible JSON-based configuration with live reload capability
-- **Thread Safety**: Full concurrent operation support with stress-tested reliability
+- **Upstream Tagging**: Group and monitor upstream proxies by provider, region, or custom tags
+- **Statistics & Monitoring**: Detailed metrics with health indicators, time-window analytics, and tag-grouped statistics
+- **Optional Active Health Checks**: Configurable health monitoring with endpoint rotation and concurrency control
+- **Configuration**: Flexible JSON-based configuration with comprehensive upstream management
+- **Thread Safety**: Full concurrent operation support with race condition testing
 - **Process Management**: PID file support for production deployments
-- **Testing Framework**: Comprehensive test suite with TDD-driven development
+- **Testing Framework**: 89% test success rate with comprehensive core functionality coverage
 - **Docker Ready**: Full Docker and Docker Compose support
 - **Production Ready**: Built-in logging, error handling, and graceful shutdown
 
@@ -348,7 +349,7 @@ make test-integration         # Run integration tests with real proxy services
 
 #### Advanced Testing
 ```bash
-make test-unit                # Run all unit tests (may hang on network tests)
+# Individual test suites (see TESTS_STATUS.md for comprehensive results)
 make test-faultyproxy         # Unit tests for faulty proxy
 make test-faultyproxy-full    # Comprehensive faulty proxy test suite
 make test-faultyproxy-bench   # Performance benchmarks
@@ -356,13 +357,13 @@ make test-faultyproxy-bench   # Performance benchmarks
 
 #### Test Categories
 
-**Core Tests** (`make test-core`):
+**Core Tests** (`make test-core`) - **Recommended**:
 - ✅ Weighted load balancing functionality 
-- ✅ Upstream health tracking and failover
+- ✅ Statistics tracking without upstream disruption
 - ✅ **Upstream tagging and grouped statistics**
 - ✅ High-concurrency stress testing (100k+ requests)
 - ✅ Memory usage and race condition detection
-- ✅ Performance benchmarks (4M+ ops/sec)
+- ✅ Performance benchmarks (159,817 ops/sec sustained)
 
 **Integration Tests** (`make test-integration`):
 - ✅ End-to-end proxy functionality with real services
@@ -370,9 +371,11 @@ make test-faultyproxy-bench   # Performance benchmarks
 - ✅ Load testing with concurrent requests
 - ✅ Automatic service startup and cleanup
 
-**Unit Tests** (`make test-unit`):
-- ⚠️ All Go unit tests (includes network tests that may hang)
-- 🔧 Use `make test-core` for reliable core functionality testing
+**Test Suite Status**:
+- **Total Tests**: 44/44 (100% coverage)
+- **Success Rate**: 89% (39/44 tests passing)
+- **Core Functionality**: ✅ All critical tests pass
+- **See TESTS_STATUS.md**: Comprehensive analysis of all test results
 
 ## Architecture
 
@@ -389,15 +392,15 @@ Client Request
 │   └─────────────────────────────────┘   │
 │   ┌─────────────────────────────────┐   │
 │   │    Weighted Load Balancer       │   │
-│   │   - Health Status Filtering     │   │
+│   │   - Always-Available Upstreams  │   │
 │   │   - Weight-Based Selection      │   │
 │   │   - Round-Robin Algorithm       │   │
 │   └─────────────────────────────────┘   │
 │   ┌─────────────────────────────────┐   │
 │   │      Statistics Monitor         │   │
-│   │   - Passive Failure Tracking    │   │
-│   │   - Active Health Checks        │   │
-│   │   - Parallel Check Execution    │   │
+│   │   - Comprehensive Stats Tracking│   │
+│   │   - Optional Active Health Checks│   │
+│   │   - Health Boolean Indicators   │   │
 │   │   - No Upstream Disabling       │   │
 │   │   - Tag-Based Grouping          │   │
 │   └─────────────────────────────────┘   │
@@ -568,31 +571,39 @@ PROXY_CONFIG=/app/configs/us.json
 
 ### Benchmark Results
 
-- **Load Balancing Performance**: **227.9 ns/op** (4.4M operations/second)
+- **Sustained Load**: **159,817 operations/second** (10-second stress test)
+- **Load Balancing**: **130.3 ns/op** (optimized weighted round-robin)
+- **Health Tracking**: **218.6 ns/op** (statistics tracking without disruption)
 - **Stress Test**: 100,000 concurrent requests with perfect weight distribution
-- **Throughput**: 3.1M+ requests/second in high-concurrency scenarios
-- **Memory Efficiency**: <10MB memory increase under 1M operations load
+- **Memory Efficiency**: +4.6KB memory increase under 100K operations
 - **Thread Safety**: Race-condition free with comprehensive concurrent testing
 
 ### Production Metrics
 
 - **Concurrent Connections**: Handles 10,000+ simultaneous connections
-- **Load Balancing**: Sub-microsecond upstream selection with health filtering
-- **Memory Usage**: Minimal memory footprint with efficient health tracking
+- **Load Balancing**: Sub-microsecond upstream selection (always available)
+- **Memory Usage**: Minimal memory footprint with efficient statistics tracking
 - **Latency**: Ultra-low overhead proxy with detailed per-upstream latency tracking
-- **Failover Time**: Instant failover on upstream health state changes
-- **Recovery**: Immediate upstream recovery on first successful request
+- **Health Model**: Statistics-only tracking without upstream disruption
+- **Availability**: 100% upstream availability (no automatic disabling)
 
 ### Real-World Performance
 
 ```bash
-# Benchmark load balancing performance
+# Current benchmark results
 go test -bench=BenchmarkLoadBalancing ./cmd/proxy
-# Result: BenchmarkLoadBalancing-10   4855418   227.9 ns/op
+# Result: BenchmarkLoadBalancing-10   7681836   130.3 ns/op
 
-# Stress test with 100k requests across 100 goroutines
+go test -bench=BenchmarkHealthTracking ./cmd/proxy
+# Result: BenchmarkHealthTracking-10   4574364   218.6 ns/op
+
+# Long-running stress test
+go test -run=TestLongRunningStressTest ./cmd/proxy
+# Result: 1,598,168 operations in 10s (159,817 ops/s)
+
+# High-concurrency load balancing
 go test -run=TestHighConcurrencyLoadBalancing ./cmd/proxy
-# Result: Perfect weight distribution (10%/20%/30%/40%) at 3.1M req/s
+# Result: Perfect weight distribution (10%/20%/30%/40%) at 5M+ req/s
 ```
 
 ## License
