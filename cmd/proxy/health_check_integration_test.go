@@ -95,7 +95,7 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 				StaggerDelay     int      `json:"stagger_delay_ms,omitempty"`
 			}{
 				Enabled:           true,
-				IntervalSeconds:   2, // Fast for testing
+				IntervalSeconds:   1, // Faster for testing
 				TimeoutSeconds:    5,
 				FailureThreshold:  2,
 				RecoveryThreshold: 1,
@@ -107,8 +107,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		ps := NewProxyServer(config, "")
 		defer ps.stopHealthChecker()
 
-		// Wait for at least one health check cycle
-		time.Sleep(3 * time.Second)
+		// Wait for health check cycle (reduced for faster testing)
+		time.Sleep(2 * time.Second)
 
 		// Proxy should be healthy
 		if !ps.isUpstreamHealthy(proxyServer.URL) {
@@ -198,8 +198,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		// Break the IP server
 		serverWorking = false
 		
-		// Wait for failure detection (2 failures at 1s interval + processing time)
-		time.Sleep(4 * time.Second)
+		// Wait for failure detection (reduced for testing)
+		time.Sleep(2 * time.Second)
 		
 		// Note: With passive health checks disabled, upstream remains healthy
 		if !ps.isUpstreamHealthy(proxyServer.URL) {
@@ -209,8 +209,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		// Fix the IP server
 		serverWorking = true
 		
-		// Wait for recovery (1 success needed)
-		time.Sleep(3 * time.Second)
+		// Wait for recovery (reduced for testing)
+		time.Sleep(2 * time.Second)
 		
 		if !ps.isUpstreamHealthy(proxyServer.URL) {
 			t.Error("Proxy should recover health after IP server recovery")
@@ -278,8 +278,8 @@ func TestHealthCheckWithRealProxyServers(t *testing.T) {
 		ps := NewProxyServer(config, "")
 		defer ps.stopHealthChecker()
 
-		// Wait for several health check cycles
-		time.Sleep(5 * time.Second)
+		// Wait for health check cycles (reduced for testing)
+		time.Sleep(2 * time.Second)
 
 		// Proxy should remain healthy because some endpoints work
 		if !ps.isUpstreamHealthy(proxyServer.URL) {
@@ -368,8 +368,8 @@ func TestHealthCheckConfigurationIntegration(t *testing.T) {
 			t.Error("Should have health checker after enabling")
 		}
 
-		// Wait for health checks
-		time.Sleep(3 * time.Second)
+		// Wait for health checks (reduced for testing)
+		time.Sleep(2 * time.Second)
 
 		if !ps.isUpstreamHealthy(proxyServer.URL) {
 			t.Error("Proxy should be healthy after enabling health checks")
@@ -439,8 +439,8 @@ func TestHealthCheckStatsIntegration(t *testing.T) {
 		ps := NewProxyServer(config, "")
 		defer ps.stopHealthChecker()
 
-		// Wait for several health check cycles
-		time.Sleep(6 * time.Second)
+		// Wait for health check cycles (reduced for testing)
+		time.Sleep(3 * time.Second)
 
 		// Check health metrics
 		metrics := ps.getStatsMetrics()
