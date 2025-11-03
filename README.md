@@ -57,6 +57,8 @@ make test               # Basic connectivity test
 # Start production proxy
 docker compose -f docker-compose.prod.yml up -d
 
+pcheck  http://admin:23432fwewf233232@49.13.7.29:3131
+
 # View logs
 docker compose -f docker-compose.prod.yml logs -f
 
