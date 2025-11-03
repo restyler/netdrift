@@ -6,9 +6,9 @@ services:
     build: .
     container_name: netdrift-proxy
     ports:
-      - "3130:3130"
+      - "3131:3131"
     environment:
-      - PROXY_CONFIG=/app/configs/docker.json
+      - PROXY_CONFIG=/app/configs/fineproxy.json
     volumes:
       - ./configs:/app/configs:ro
       - netdrift-logs:/var/log/netdrift
@@ -16,7 +16,7 @@ services:
       - netdrift-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3130/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:3131/stats"]
       interval: 30s
       timeout: 10s
       retries: 3
